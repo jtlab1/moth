@@ -25,7 +25,8 @@ struct MeasurementResultCard: View {
                     .mothAppear(delay: 0.06)
             }
 
-            if let note = draft.flicker.diagnosticNote {
+            // Every note: each names a different condition that cost confidence or a quantity.
+            ForEach(Array(draft.flicker.diagnosticNotes.enumerated()), id: \.offset) { _, note in
                 Label(note, systemImage: "info.circle")
                     .font(.subheadline)
                     .foregroundStyle(palette.warning)
@@ -103,6 +104,7 @@ struct MeasurementResultCard: View {
                 Text(draft.flicker.tier.explanation)
                 Text(draft.flicker.confidence.explanation)
                 waveformSection
+                CaptureDetailsDisclosure(flicker: draft.flicker)
             }
             .font(.subheadline)
             .foregroundStyle(palette.secondaryText)

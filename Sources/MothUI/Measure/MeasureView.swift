@@ -13,6 +13,10 @@ public struct MeasureView: View {
     /// a second preview layer blocked the main thread ~9 s and blacked out the visible one.
     let showsLivePreview: Bool
 
+    /// Set when this phone's calibration is outdated: a banner offers recalibrating, but
+    /// measuring stays available (presence only) in the meantime.
+    let onRecalibrate: (() -> Void)?
+
     @Environment(\.mothPalette) private var palette
     @State private var roomName: String
     @State private var isSaved = false
@@ -24,11 +28,13 @@ public struct MeasureView: View {
         viewModel: MeasureViewModel,
         presetRoomName: String? = nil,
         showsLivePreview: Bool = true,
+        onRecalibrate: (() -> Void)? = nil,
         onSaveRoom: @escaping (MeasurementDraft, Int?, String) -> Void
     ) {
         self.viewModel = viewModel
         self.presetRoomName = presetRoomName
         self.showsLivePreview = showsLivePreview
+        self.onRecalibrate = onRecalibrate
         self.onSaveRoom = onSaveRoom
         self._roomName = State(initialValue: presetRoomName ?? "")
     }
@@ -36,6 +42,11 @@ public struct MeasureView: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: MothTheme.sectionSpacing) {
+                if let onRecalibrate {
+                    RecalibrationBanner(onRecalibrate: onRecalibrate)
+                        .transition(.mothSwap)
+                }
+
                 heroCard
 
                 if viewModel.phase == .result, let draft = viewModel.draft {

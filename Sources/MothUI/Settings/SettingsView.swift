@@ -156,18 +156,20 @@ public struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center) {
                     MothSectionHeader("Calibration")
-                    Image(systemName: calibrationState.isCalibrated ? "checkmark.circle" : "exclamationmark.circle")
+                    Image(systemName: calibrationStatusSymbol)
                         .font(.title3)
                         .foregroundStyle(calibrationState.isCalibrated ? palette.success : palette.warning)
                         .contentTransition(.symbolEffect(.replace))
+                        .accessibilityHidden(true)
                 }
                 Text(calibrationStatusText)
-                    .font(.subheadline)
-                    .foregroundStyle(palette.secondaryText)
+                    .font(calibrationState.isOutdated ? .subheadline.weight(.semibold) : .subheadline)
+                    .foregroundStyle(calibrationState.isOutdated ? palette.primaryText : palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button {
                     onRecalibrate()
                 } label: {
-                    Label(calibrationState.isCalibrated ? "Recalibrate" : "Calibrate", systemImage: "scope")
+                    Label(calibrationState.isCalibrated || calibrationState.isOutdated ? "Recalibrate" : "Calibrate", systemImage: "scope")
                 }
                 .buttonStyle(.mothPrimary)
                 if calibrationState.isCalibrated {
@@ -180,15 +182,26 @@ public struct SettingsView: View {
         }
     }
 
+    private var calibrationStatusSymbol: String {
+        if calibrationState.isCalibrated { return "checkmark.circle" }
+        if calibrationState.isOutdated { return "arrow.triangle.2.circlepath" }
+        return "exclamationmark.circle"
+    }
+
     private var calibrationStatusText: String {
         switch calibrationState {
         case .uncalibrated:
             return "Not calibrated yet. Moth can tell you whether a light is flickering but not how fast."
         case .calibrated(let calibration):
-            guard settings.debugModeEnabled else { return "Calibrated." }
-            return "Calibrated: \(calibration.formattedLineReadoutTime)."
+            let summary = calibration.responseCurve != nil
+                ? "Calibrated for full measurement: frequency, depth and the IEEE 1789 verdict."
+                : "Calibrated for frequency. The light-response step didn’t finish, so depth isn’t available. Recalibrate to try it again."
+            guard settings.debugModeEnabled else { return summary }
+            return "\(summary) \(calibration.formattedLineReadoutTime), \(calibration.format.formattedDimensions)."
         case .foreignDevice:
             return "A calibration exists but was solved on different hardware. Recalibrate on this phone."
+        case .outdated:
+            return RecalibrationBanner.message
         case .rejected:
             return "The last calibration attempt was rejected as implausible. Try again."
         }

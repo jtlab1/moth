@@ -3,24 +3,32 @@ import Foundation
 /// Display-only re-derivation, kept apart from `RealFlickerAnalyzer` so the fixed
 /// `FlickerAnalyzing` seam doesn't change to show a picture.
 public enum FlickerWaveformBuilder {
+    /// Folds the flat-field ratio, so the lamp's shape and the scene don't draw on the picture.
+    /// Uses the capture's own linearisation when it has one; otherwise falls back to an assumed
+    /// Rec.709 decode, which is fine for a picture and never used for depth.
     public static func fold(
         capture: RowBrightnessCapture,
         frequencyHz: Double,
         binCount: Int = 48
     ) -> FlickerWaveform? {
-        guard frequencyHz > 0, let lineReadoutTime = capture.lineReadoutTime else { return nil }
+        guard frequencyHz > 0, binCount > 1, let lineReadoutTime = capture.lineReadoutTime else { return nil }
+
+        let display = capture.isLinear ? capture : linearizedForDisplay(capture)
+        guard let field = try? FlatField.normalise(display) else { return nil }
 
         let period = 1.0 / frequencyHz
+        let origin = field.presentationTimes.first ?? 0
         var bins = [Double](repeating: 0, count: binCount)
         var counts = [Int](repeating: 0, count: binCount)
 
-        for frame in capture.frames {
-            for (row, value) in frame.rowBrightness.enumerated() {
-                let time = frame.presentationTime + Double(row) * lineReadoutTime
+        for (frameIndex, ratio) in field.ratios.enumerated() {
+            let frameTime = field.presentationTimes[frameIndex] - origin
+            for row in 0..<field.rowCount where field.usableRows[row] {
+                let time = frameTime + Double(row) * lineReadoutTime
                 let rawPhase = time.truncatingRemainder(dividingBy: period) / period
                 let normalizedPhase = rawPhase < 0 ? rawPhase + 1 : rawPhase
                 let bin = min(binCount - 1, Int(normalizedPhase * Double(binCount)))
-                bins[bin] += linearize(Double(value) / 255.0)
+                bins[bin] += Double(ratio[row])
                 counts[bin] += 1
             }
         }
@@ -39,7 +47,31 @@ public enum FlickerWaveformBuilder {
         return FlickerWaveform(frequencyHz: frequencyHz, points: points)
     }
 
-    /// Duplicated from `RealFlickerAnalyzer` so the picture never reaches into the analyzer.
+    /// Rec.709 decode of black-subtracted row codes; display only.
+    private static func linearizedForDisplay(_ capture: RowBrightnessCapture) -> RowBrightnessCapture {
+        let frames = capture.frames.map { frame in
+            RowBrightnessFrame(
+                rowBrightness: frame.rowBrightness.map { Float(linearize(Double($0) / 255.0)) },
+                presentationTime: frame.presentationTime,
+                exposureDuration: frame.exposureDuration,
+                iso: frame.iso,
+                exposureMode: frame.exposureMode
+            )
+        }
+        return RowBrightnessCapture(
+            frames: frames,
+            lineReadoutTime: capture.lineReadoutTime,
+            isLinear: false,
+            blackPointCode: capture.blackPointCode,
+            rowMeanCodes: capture.rowMeanCodes,
+            rowSaturated: capture.rowSaturated,
+            rowBlackClipped: capture.rowBlackClipped,
+            saturatedFraction: capture.saturatedFraction,
+            crushedFraction: capture.crushedFraction,
+            meanBrightness: capture.meanBrightness
+        )
+    }
+
     private static func linearize(_ code: Double) -> Double {
         let clamped = max(0, min(1, code))
         if clamped <= 0.081 {

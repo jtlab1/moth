@@ -22,6 +22,10 @@ public final class MeasureViewModel {
     public private(set) var draft: MeasurementDraft?
     public var comfortRating: Int?
 
+    /// The standard format the camera captures in, once prepared: what a calibration must
+    /// match to apply. `nil` until then (and on hardware without a camera).
+    public private(set) var captureFormat: CaptureFormatSignature?
+
     private let runner: MeasurementRunner
     private let calibrationProvider: () -> DeviceCalibration?
     private var calibration: DeviceCalibration? { calibrationProvider() }
@@ -65,6 +69,7 @@ public final class MeasureViewModel {
                 throw CaptureSetupError.cameraPermissionMissing
             }
             try await runner.prepare()
+            await refreshCaptureFormat()
         }
         prepareTask = task
         return task
@@ -94,6 +99,8 @@ public final class MeasureViewModel {
 
     public func capture() {
         guard phase == .previewing else { return }
+        // Leave `.previewing` now, so a second tap can't start a second capture.
+        phase = .capturing(CaptureProgress(framesCaptured: 0, elapsed: 0, duration: MeasurementRunner.captureDuration))
         captureTask = Task { await runCapture() }
     }
 
@@ -117,6 +124,14 @@ public final class MeasureViewModel {
         } catch {
             guard generation == self.generation else { return }
             phase = .failed(Self.message(for: error, fallback: "Measurement failed."))
+        }
+    }
+
+    /// Also called after calibrating, since the format a calibration records is what the
+    /// camera actually delivered.
+    public func refreshCaptureFormat() async {
+        if let format = await runner.activeFormatSignature() {
+            captureFormat = format
         }
     }
 

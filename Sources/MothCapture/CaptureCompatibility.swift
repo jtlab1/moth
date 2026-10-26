@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import MeasurementCore
 
 // iOS-only AVFoundation members isolated so the rest of the capture layer type-checks with
 // `swift build`. Non-iOS branches are placeholders never used at runtime.
@@ -17,6 +18,24 @@ extension AVCaptureSession {
 }
 
 extension AVCaptureDevice.Format {
+    /// Plain values for `CaptureFormatSelector`.
+    var captureDescriptor: CaptureFormatDescriptor {
+        let dimensions = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        #if os(iOS)
+        let binned = isVideoBinned
+        #else
+        let binned = false
+        #endif
+        return CaptureFormatDescriptor(
+            width: Int(dimensions.width),
+            height: Int(dimensions.height),
+            pixelFormat: CMFormatDescriptionGetMediaSubType(formatDescription),
+            frameRateRanges: videoSupportedFrameRateRanges.map { $0.minFrameRate...max($0.minFrameRate, $0.maxFrameRate) },
+            minimumExposure: minExposureSeconds,
+            isBinned: binned
+        )
+    }
+
     var minExposureSeconds: TimeInterval {
         #if os(iOS)
         return CMTimeGetSeconds(minExposureDuration)
@@ -95,16 +114,168 @@ extension AVCaptureDevice {
         #endif
     }
 
-    /// Requires the device configuration lock. A no-op off-iOS.
-    func setCustomExposure(duration: CMTime, iso: Float) {
+    /// Requires the device configuration lock. `false` (and no call to `applied`) when
+    /// custom exposure isn't available. `applied` receives the device-clock sync time of the
+    /// first buffer with the new values, on an arbitrary queue.
+    @discardableResult
+    func setCustomExposure(
+        duration: TimeInterval,
+        iso: Float,
+        applied: (@Sendable (CMTime) -> Void)? = nil
+    ) -> Bool {
         #if os(iOS)
-        setExposureModeCustom(duration: duration, iso: iso, completionHandler: nil)
+        guard isExposureModeSupported(.custom) else { return false }
+        let format = activeFormat
+        let clampedDuration = min(max(duration, format.minExposureSeconds), format.maxExposureSeconds)
+        let clampedISO = min(max(iso, format.minISO), format.maxISO)
+        setExposureModeCustom(
+            duration: CMTime(seconds: clampedDuration, preferredTimescale: 1_000_000_000),
+            iso: clampedISO,
+            completionHandler: applied.map { handler in { syncTime in handler(syncTime) } }
+        )
+        return true
+        #else
+        return false
         #endif
+    }
+
+    /// Requires the device configuration lock. Preview meters continuously so the metering at
+    /// capture start reflects what the camera is aimed at.
+    func restoreContinuousAutoExposure() {
+        #if os(iOS)
+        if isExposureModeSupported(.continuousAutoExposure) {
+            exposureMode = .continuousAutoExposure
+        }
+        #endif
+    }
+
+    /// Requires the device configuration lock. Everything spec A forces besides format, frame
+    /// rate and exposure: each is a scene-dependent or time-varying transform of the measured
+    /// quantity, or would shift the rows. Idempotent, so capture start re-applies it in case
+    /// something (a session restart) reset a property.
+    func applyStandardImagingState() {
+        #if os(iOS)
+        // Video HDR: a non-linear, scene-dependent transform.
+        disableVideoHDRIfSupported()
+
+        // sRGB, never P3/HLG: wide colour inserts an unknown transfer curve.
+        if activeFormat.supportedColorSpaces.contains(.sRGB) {
+            activeColorSpace = .sRGB
+        }
+
+        // Global tone mapping would bend the curve differently with scene content.
+        if activeFormat.isGlobalToneMappingSupported {
+            isGlobalToneMappingEnabled = false
+        }
+
+        // Low-light boost lengthens frames and changes gain behind our back.
+        if isLowLightBoostSupported {
+            automaticallyEnablesLowLightBoostWhenAvailable = false
+        }
+
+        // Distortion correction resamples rows, mixing readout times.
+        if isGeometricDistortionCorrectionSupported {
+            isGeometricDistortionCorrectionEnabled = false
+        }
+
+        // Auto frame rate would undo the pinned 29 fps in dim light.
+        if activeFormat.isAutoVideoFrameRateSupported {
+            isAutoVideoFrameRateEnabled = false
+        }
+
+        // Zoom crops and resamples the sensor rows.
+        if videoZoomFactor != 1.0 {
+            videoZoomFactor = 1.0
+        }
+
+        // The torch would itself be a (PWM-driven) light source in the measurement.
+        if hasTorch, torchMode != .off, isTorchModeSupported(.off) {
+            torchMode = .off
+        }
+
+        isSubjectAreaChangeMonitoringEnabled = false
+
+        // Deliberate, consistent defocus: blurs scene detail; per-row means don't need it.
+        if isLockingFocusWithCustomLensPositionSupported {
+            setFocusModeLocked(lensPosition: CaptureStandard.focusLensPosition, completionHandler: nil)
+        } else if isFocusModeSupported(.locked) {
+            focusMode = .locked
+        }
+
+        // Fixed 5000 K / tint 0 gains: a white-balance shift would read as modulation.
+        if isLockingWhiteBalanceWithCustomDeviceGainsSupported {
+            let values = AVCaptureDevice.WhiteBalanceTemperatureAndTintValues(
+                temperature: CaptureStandard.whiteBalanceTemperature,
+                tint: CaptureStandard.whiteBalanceTint
+            )
+            var gains = deviceWhiteBalanceGains(for: values)
+            let ceiling = max(1, maxWhiteBalanceGain)
+            gains.redGain = min(max(gains.redGain, 1), ceiling)
+            gains.greenGain = min(max(gains.greenGain, 1), ceiling)
+            gains.blueGain = min(max(gains.blueGain, 1), ceiling)
+            setWhiteBalanceModeLocked(with: gains, completionHandler: nil)
+        } else if isWhiteBalanceModeSupported(.locked) {
+            whiteBalanceMode = .locked
+        }
+
+        // AE's target must be unbiased, or the metering conversion inherits the bias.
+        if isExposureModeSupported(.continuousAutoExposure), exposureTargetBias != 0 {
+            setExposureTargetBias(0, completionHandler: nil)
+        }
+        #else
+        if isFocusModeSupported(.locked) { focusMode = .locked }
+        if isWhiteBalanceModeSupported(.locked) { whiteBalanceMode = .locked }
+        #endif
+    }
+
+    /// Read back, for `CaptureConditions`; `nil` off-iOS.
+    var currentLensPosition: Float? {
+        #if os(iOS)
+        return lensPosition
+        #else
+        return nil
+        #endif
+    }
+
+    var isWhiteBalanceLocked: Bool {
+        whiteBalanceMode == .locked
     }
 
     static func disableWideColor(on session: AVCaptureSession) {
         #if os(iOS)
         session.automaticallyConfiguresCaptureDeviceForWideColor = false
+        #endif
+    }
+}
+
+extension AVCaptureConnection {
+    /// Rows must be the sensor's readout rows, untouched: stabilization warps and crops them,
+    /// rotation turns rows into columns, mirroring is harmless but not the standard.
+    func applyStandardBufferState() {
+        #if os(iOS)
+        if isVideoStabilizationSupported {
+            preferredVideoStabilizationMode = .off
+        }
+        if isVideoRotationAngleSupported(0), videoRotationAngle != 0 {
+            videoRotationAngle = 0
+        }
+        #endif
+        if isVideoMirroringSupported {
+            automaticallyAdjustsVideoMirroring = false
+            isVideoMirrored = false
+        }
+    }
+}
+
+extension AVCaptureSession {
+    /// Converts a device-clock sync time (exposure completion handlers) to the clock sample
+    /// buffers are stamped in. Identity when either clock is unknown.
+    func bufferTime(fromDeviceTime time: CMTime, deviceClock: CMClock?) -> CMTime {
+        #if os(iOS)
+        guard let deviceClock, let bufferClock = synchronizationClock else { return time }
+        return CMSyncConvertTime(time, from: deviceClock, to: bufferClock)
+        #else
+        return time
         #endif
     }
 }

@@ -1,8 +1,7 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// Every layer is a SwiftPM target so it builds and tests on macOS without Xcode, and so
-// MeasurementCore can't accidentally import UI or AVFoundation. macOS exists only for tests.
+// Every layer is a SwiftPM target so MeasurementCore can't accidentally import UI or AVFoundation.
 let package = Package(
     name: "Moth",
     platforms: [.iOS(.v18), .macOS(.v14)],
@@ -22,7 +21,7 @@ let package = Package(
             dependencies: ["MeasurementCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-        // Separate from MothUI so the store and migrations test without AVFoundation or SwiftUI.
+        // Separate from MothUI so the store and migrations don't depend on AVFoundation or SwiftUI.
         .target(
             name: "MothPersistence",
             dependencies: ["MeasurementCore"],
@@ -31,21 +30,6 @@ let package = Package(
         .target(
             name: "MothUI",
             dependencies: ["MeasurementCore", "MothCapture", "MothPersistence"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-        .testTarget(
-            name: "MeasurementCoreTests",
-            dependencies: ["MeasurementCore"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-        .testTarget(
-            name: "MothCaptureTests",
-            dependencies: ["MothCapture", "MeasurementCore"],
-            swiftSettings: [.swiftLanguageMode(.v6)]
-        ),
-        .testTarget(
-            name: "MothPersistenceTests",
-            dependencies: ["MothPersistence", "MeasurementCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]

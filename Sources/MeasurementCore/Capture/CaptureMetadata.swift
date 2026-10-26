@@ -78,10 +78,17 @@ public struct CaptureMetadata: Sendable, Codable, Hashable {
 
     /// `nil` when uncalibrated, which forces Tier 3.
     public let lineReadoutTime: TimeInterval?
+
+    /// From the applicable calibration; `nil` means rows stay in code units and depth is
+    /// unavailable.
+    public let responseCurve: ResponseCurve?
     public let deviceCapability: DeviceCapabilityProfile
 
     /// Never used for timing: `Date` is not monotonic.
     public let startedAt: Date
+
+    /// `nil` for captures recorded before the capture standard, and for synthetic captures.
+    public let conditions: CaptureConditions?
 
     public init(
         dimensions: FrameDimensions,
@@ -90,8 +97,10 @@ public struct CaptureMetadata: Sendable, Codable, Hashable {
         region: CaptureRegion? = nil,
         frames: [FrameMetadata],
         lineReadoutTime: TimeInterval?,
+        responseCurve: ResponseCurve? = nil,
         deviceCapability: DeviceCapabilityProfile,
-        startedAt: Date
+        startedAt: Date,
+        conditions: CaptureConditions? = nil
     ) {
         self.dimensions = dimensions
         self.pixelFormat = pixelFormat
@@ -99,8 +108,10 @@ public struct CaptureMetadata: Sendable, Codable, Hashable {
         self.region = region
         self.frames = frames
         self.lineReadoutTime = lineReadoutTime
+        self.responseCurve = responseCurve
         self.deviceCapability = deviceCapability
         self.startedAt = startedAt
+        self.conditions = conditions
     }
 }
 

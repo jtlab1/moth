@@ -303,7 +303,17 @@ public struct RoomDetailView: View {
         }
     }
 
+    /// The summary line reads as one VoiceOver element; the disclosure stays separately operable.
     private func historyRow(_ measurement: RoomMeasurement, previous: RoomMeasurement?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            historySummary(measurement, previous: previous)
+            CaptureDetailsDisclosure(flicker: measurement.flicker, includesNotes: true)
+                .padding(.leading, 22)
+                .padding(.bottom, 4)
+        }
+    }
+
+    private func historySummary(_ measurement: RoomMeasurement, previous: RoomMeasurement?) -> some View {
         HStack(alignment: .center, spacing: 12) {
             SeverityDot(severity: measurement.flicker.severity)
             VStack(alignment: .leading, spacing: 3) {

@@ -56,7 +56,7 @@ public final class MothStore {
     public static func makeInMemory() throws -> MothStore {
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try ModelContainer(
-            for: Schema(versionedSchema: MothSchemaV3.self),
+            for: Schema(versionedSchema: MothSchemaV4.self),
             migrationPlan: MothMigrationPlan.self,
             configurations: configuration
         )
@@ -76,7 +76,7 @@ public final class MothStore {
 
     private static func makeOnDiskContainer(at url: URL) throws -> ModelContainer {
         try ModelContainer(
-            for: Schema(versionedSchema: MothSchemaV3.self),
+            for: Schema(versionedSchema: MothSchemaV4.self),
             migrationPlan: MothMigrationPlan.self,
             configurations: ModelConfiguration(url: url)
         )
@@ -106,42 +106,72 @@ public final class MothStore {
 
     public var buildings: [Building] {
         _ = changeToken
-        return fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt).map(Self.domain)
+        return fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt).map(Self.domain)
     }
 
     public var rooms: [Room] {
         _ = changeToken
-        return fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).map(Self.domain)
+        return fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).map(Self.domain)
     }
 
     /// Undecodable records are dropped rather than crashing the list.
     public var measurements: [RoomMeasurement] {
         _ = changeToken
-        return fetchAll(MothSchemaV3.RoomMeasurementRecord.self, sortBy: \.capturedAt).compactMap(Self.domain)
+        return fetchAll(MothSchemaV4.RoomMeasurementRecord.self, sortBy: \.capturedAt).compactMap(Self.domain)
     }
 
     /// Oldest first, so a new one lands at the end instead of reshuffling pills.
     public var customCopingStrategies: [CustomCopingStrategy] {
         _ = changeToken
-        return fetchAll(MothSchemaV3.CustomCopingStrategyRecord.self, sortBy: \.createdAt).map(Self.domain)
+        return fetchAll(MothSchemaV4.CustomCopingStrategyRecord.self, sortBy: \.createdAt).map(Self.domain)
     }
 
     public var calibrations: [DeviceCalibration] {
         _ = changeToken
-        return fetchAll(MothSchemaV3.CalibrationRecord.self, sortBy: \.capturedAt).map(Self.domain)
+        return fetchAll(MothSchemaV4.CalibrationRecord.self, sortBy: \.capturedAt).map(Self.domain)
     }
 
+    /// The gate for using a calibration on a capture in `format`: `.calibrated` only for a
+    /// current-version calibration of this model solved under a matching format; `.outdated`
+    /// when this model has calibrations but none applies.
+    public func calibrationState(
+        forDeviceModelIdentifier modelIdentifier: String,
+        format: CaptureFormatSignature
+    ) -> CalibrationState {
+        let all = calibrations
+        guard let latest = all.max(by: { $0.capturedAt < $1.capturedAt }) else {
+            return .uncalibrated
+        }
+        let sameModel = all.filter { $0.deviceModelIdentifier == modelIdentifier }
+        guard let latestSameModel = sameModel.max(by: { $0.capturedAt < $1.capturedAt }) else {
+            return .foreignDevice(latest)
+        }
+        guard let applicable = sameModel
+            .filter({ $0.appliesTo(modelIdentifier: modelIdentifier, format: format) })
+            .max(by: { $0.capturedAt < $1.capturedAt })
+        else {
+            return .outdated(latestSameModel)
+        }
+        return .calibrated(applicable)
+    }
+
+    /// For callers that don't know the capture format yet (the first-run gate, Settings).
+    /// Version-aware but format-blind: anything solved before the current method reads as
+    /// `.outdated`, never `.calibrated`. The capture layer re-checks the format before using a
+    /// `.calibrated` result (`DeviceCalibration.appliesTo(modelIdentifier:format:)`).
     public func calibrationState(forDeviceModelIdentifier modelIdentifier: String) -> CalibrationState {
         let all = calibrations
         guard let latest = all.max(by: { $0.capturedAt < $1.capturedAt }) else {
             return .uncalibrated
         }
-        guard let matching = all.filter({ $0.appliesTo(modelIdentifier: modelIdentifier) })
-            .max(by: { $0.capturedAt < $1.capturedAt })
-        else {
+        let sameModel = all.filter { $0.deviceModelIdentifier == modelIdentifier }
+        guard let latestSameModel = sameModel.max(by: { $0.capturedAt < $1.capturedAt }) else {
             return .foreignDevice(latest)
         }
-        return .calibrated(matching)
+        guard let current = sameModel.filter(\.isCurrentVersion).max(by: { $0.capturedAt < $1.capturedAt }) else {
+            return .outdated(latestSameModel)
+        }
+        return .calibrated(current)
     }
 
     // MARK: - Writes
@@ -149,13 +179,20 @@ public final class MothStore {
     /// Keeps older calibrations: the history shows whether readout time drifts.
     public func addCalibration(_ calibration: DeviceCalibration) throws {
         context.insert(
-            MothSchemaV3.CalibrationRecord(
+            MothSchemaV4.CalibrationRecord(
                 id: calibration.id,
                 deviceModelIdentifier: calibration.deviceModelIdentifier,
                 lineReadoutTime: calibration.lineReadoutTime,
                 referenceFrequencyHz: calibration.referenceFrequencyHz,
                 calibratedLineCount: calibration.calibratedLineCount,
-                capturedAt: calibration.capturedAt
+                capturedAt: calibration.capturedAt,
+                formatWidth: calibration.format.width,
+                formatHeight: calibration.format.height,
+                formatFrameRate: calibration.format.frameRate,
+                formatPixelFormat: Int(calibration.format.pixelFormat),
+                formatExposureDuration: calibration.format.exposureDuration,
+                responseCurveData: calibration.responseCurve?.data,
+                calibrationVersion: calibration.calibrationVersion
             )
         )
         try context.save()
@@ -170,17 +207,17 @@ public final class MothStore {
         buildingID: UUID? = nil
     ) throws -> Room {
         let trimmedName = roomName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let existingRooms = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt)
-        let roomRecord: MothSchemaV3.RoomRecord
+        let existingRooms = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt)
+        let roomRecord: MothSchemaV4.RoomRecord
         if let match = existingRooms.first(where: { $0.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame }) {
             roomRecord = match
         } else {
-            var buildingRecord: MothSchemaV3.BuildingRecord?
+            var buildingRecord: MothSchemaV4.BuildingRecord?
             if let buildingID {
-                buildingRecord = fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt)
+                buildingRecord = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt)
                     .first { $0.id == buildingID }
             }
-            roomRecord = MothSchemaV3.RoomRecord(
+            roomRecord = MothSchemaV4.RoomRecord(
                 id: UUID(),
                 name: trimmedName,
                 building: buildingRecord,
@@ -191,8 +228,10 @@ public final class MothStore {
             context.insert(roomRecord)
         }
 
-        let flickerData = try JSONEncoder().encode(measurement.flicker)
-        let measurementRecord = MothSchemaV3.RoomMeasurementRecord(
+        let flicker = measurement.flicker
+        let conditions = flicker.conditions
+        let flickerData = try JSONEncoder().encode(flicker)
+        let measurementRecord = MothSchemaV4.RoomMeasurementRecord(
             id: measurement.id,
             room: roomRecord,
             capturedAt: measurement.capturedAt,
@@ -202,7 +241,15 @@ public final class MothStore {
             lineReadoutTimeUsed: measurement.lineReadoutTimeUsed,
             calibrationID: measurement.calibrationID,
             mainsRegionRaw: measurement.mainsRegion?.rawValue,
-            comfortRating: measurement.comfortRating
+            comfortRating: measurement.comfortRating,
+            exposureDuration: conditions?.exposureDuration,
+            iso: conditions.map { Double($0.iso) },
+            frameRate: conditions?.frameRate,
+            formatWidth: conditions?.formatSignature.width,
+            formatHeight: conditions?.formatSignature.height,
+            droppedFrameCount: conditions?.droppedFrameCount,
+            responseCurveApplied: flicker.responseCurveApplied,
+            analysisVersion: flicker.analysisVersion
         )
         context.insert(measurementRecord)
         try context.save()
@@ -214,17 +261,17 @@ public final class MothStore {
     @discardableResult
     public func createRoom(name: String, buildingID: UUID? = nil) throws -> Room {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let existingRooms = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt)
+        let existingRooms = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt)
         if let match = existingRooms.first(where: { $0.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame }) {
             return Self.domain(match)
         }
 
-        var buildingRecord: MothSchemaV3.BuildingRecord?
+        var buildingRecord: MothSchemaV4.BuildingRecord?
         if let buildingID {
-            buildingRecord = fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt)
+            buildingRecord = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt)
                 .first { $0.id == buildingID }
         }
-        let roomRecord = MothSchemaV3.RoomRecord(
+        let roomRecord = MothSchemaV4.RoomRecord(
             id: UUID(),
             name: trimmedName,
             building: buildingRecord,
@@ -242,11 +289,11 @@ public final class MothStore {
     @discardableResult
     public func createBuilding(name: String) throws -> Building {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let existing = fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt)
+        let existing = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt)
         if let match = existing.first(where: { $0.name.localizedCaseInsensitiveCompare(trimmedName) == .orderedSame }) {
             return Self.domain(match)
         }
-        let record = MothSchemaV3.BuildingRecord(id: UUID(), name: trimmedName, notes: "", createdAt: Date())
+        let record = MothSchemaV4.BuildingRecord(id: UUID(), name: trimmedName, notes: "", createdAt: Date())
         context.insert(record)
         try context.save()
         changeToken += 1
@@ -254,11 +301,11 @@ public final class MothStore {
     }
 
     public func updateRoomBuilding(roomID: UUID, buildingID: UUID?) throws {
-        guard let record = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
+        guard let record = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
             throw MothStoreError.roomNotFound
         }
         if let buildingID {
-            guard let buildingRecord = fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt)
+            guard let buildingRecord = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt)
                 .first(where: { $0.id == buildingID })
             else {
                 throw MothStoreError.buildingNotFound
@@ -276,7 +323,7 @@ public final class MothStore {
     public func renameRoom(id: UUID, to name: String) throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { throw MothStoreError.nameEmpty }
-        let records = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt)
+        let records = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt)
         guard let record = records.first(where: { $0.id == id }) else {
             throw MothStoreError.roomNotFound
         }
@@ -293,7 +340,7 @@ public final class MothStore {
     public func renameBuilding(id: UUID, to name: String) throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { throw MothStoreError.nameEmpty }
-        let records = fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt)
+        let records = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt)
         guard let record = records.first(where: { $0.id == id }) else {
             throw MothStoreError.buildingNotFound
         }
@@ -309,7 +356,7 @@ public final class MothStore {
 
     /// Irreversible and takes the room's measurements with it; the caller confirms with the user.
     public func deleteRoom(id: UUID) throws {
-        guard let record = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == id }) else {
+        guard let record = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == id }) else {
             return
         }
         context.delete(record)
@@ -320,10 +367,10 @@ public final class MothStore {
     /// Its rooms become unassigned rather than following the schema's cascade: a building is a
     /// grouping, and deleting one shouldn't silently erase every reading inside it.
     public func deleteBuilding(id: UUID) throws {
-        guard let record = fetchAll(MothSchemaV3.BuildingRecord.self, sortBy: \.createdAt).first(where: { $0.id == id }) else {
+        guard let record = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt).first(where: { $0.id == id }) else {
             return
         }
-        for room in fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt) where room.building?.id == id {
+        for room in fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt) where room.building?.id == id {
             room.building = nil
         }
         context.delete(record)
@@ -332,7 +379,7 @@ public final class MothStore {
     }
 
     public func updateFixtureType(roomID: UUID, fixtureType: FixtureType) throws {
-        guard let record = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
+        guard let record = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
             throw MothStoreError.roomNotFound
         }
         record.fixtureTypeRaw = fixtureType.rawValue
@@ -341,7 +388,7 @@ public final class MothStore {
     }
 
     public func updateNotes(roomID: UUID, notes: String) throws {
-        guard let record = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
+        guard let record = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
             throw MothStoreError.roomNotFound
         }
         record.notes = notes
@@ -350,7 +397,7 @@ public final class MothStore {
     }
 
     public func updateCopingStrategies(roomID: UUID, strategies: Set<CopingStrategy>) throws {
-        guard let record = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
+        guard let record = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
             throw MothStoreError.roomNotFound
         }
         record.copingStrategyRawValues = strategies.map(\.rawValue)
@@ -364,11 +411,11 @@ public final class MothStore {
         guard let normalized = CustomCopingStrategy.normalizedTitle(title) else {
             throw MothStoreError.customCopingStrategyTitleEmpty
         }
-        let existing = fetchAll(MothSchemaV3.CustomCopingStrategyRecord.self, sortBy: \.createdAt)
+        let existing = fetchAll(MothSchemaV4.CustomCopingStrategyRecord.self, sortBy: \.createdAt)
         if let match = existing.first(where: { $0.title.localizedCaseInsensitiveCompare(normalized) == .orderedSame }) {
             return Self.domain(match)
         }
-        let record = MothSchemaV3.CustomCopingStrategyRecord(id: UUID(), title: normalized, createdAt: Date())
+        let record = MothSchemaV4.CustomCopingStrategyRecord(id: UUID(), title: normalized, createdAt: Date())
         context.insert(record)
         try context.save()
         changeToken += 1
@@ -376,7 +423,7 @@ public final class MothStore {
     }
 
     public func updateCustomCopingStrategies(roomID: UUID, strategyIDs: Set<UUID>) throws {
-        guard let record = fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
+        guard let record = fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt).first(where: { $0.id == roomID }) else {
             throw MothStoreError.roomNotFound
         }
         record.customCopingStrategyIDs = Array(strategyIDs)
@@ -386,12 +433,12 @@ public final class MothStore {
 
     /// Also unchecks it in every room, so nothing points at a missing id.
     public func deleteCustomCopingStrategy(id: UUID) throws {
-        guard let record = fetchAll(MothSchemaV3.CustomCopingStrategyRecord.self, sortBy: \.createdAt)
+        guard let record = fetchAll(MothSchemaV4.CustomCopingStrategyRecord.self, sortBy: \.createdAt)
             .first(where: { $0.id == id })
         else {
             return
         }
-        for room in fetchAll(MothSchemaV3.RoomRecord.self, sortBy: \.createdAt) where room.customCopingStrategyIDs.contains(id) {
+        for room in fetchAll(MothSchemaV4.RoomRecord.self, sortBy: \.createdAt) where room.customCopingStrategyIDs.contains(id) {
             room.customCopingStrategyIDs.removeAll { $0 == id }
         }
         context.delete(record)
@@ -401,18 +448,18 @@ public final class MothStore {
 
     /// Irreversible; the caller confirms with the user.
     public func wipeAll() throws {
-        try context.delete(model: MothSchemaV3.RoomMeasurementRecord.self)
-        try context.delete(model: MothSchemaV3.RoomRecord.self)
-        try context.delete(model: MothSchemaV3.BuildingRecord.self)
-        try context.delete(model: MothSchemaV3.CalibrationRecord.self)
-        try context.delete(model: MothSchemaV3.CustomCopingStrategyRecord.self)
+        try context.delete(model: MothSchemaV4.RoomMeasurementRecord.self)
+        try context.delete(model: MothSchemaV4.RoomRecord.self)
+        try context.delete(model: MothSchemaV4.BuildingRecord.self)
+        try context.delete(model: MothSchemaV4.CalibrationRecord.self)
+        try context.delete(model: MothSchemaV4.CustomCopingStrategyRecord.self)
         try context.save()
         changeToken += 1
     }
 
     /// Irreversible and scoped to one device model; the caller confirms with the user.
     public func resetCalibration(forDeviceModelIdentifier modelIdentifier: String) throws {
-        let records = fetchAll(MothSchemaV3.CalibrationRecord.self, sortBy: \.capturedAt)
+        let records = fetchAll(MothSchemaV4.CalibrationRecord.self, sortBy: \.capturedAt)
             .filter { $0.deviceModelIdentifier == modelIdentifier }
         guard !records.isEmpty else { return }
         for record in records {
@@ -434,11 +481,11 @@ public final class MothStore {
 
     // MARK: - Domain mapping
 
-    private static func domain(_ record: MothSchemaV3.BuildingRecord) -> Building {
+    private static func domain(_ record: MothSchemaV4.BuildingRecord) -> Building {
         Building(id: record.id, name: record.name, notes: record.notes, createdAt: record.createdAt)
     }
 
-    private static func domain(_ record: MothSchemaV3.RoomRecord) -> Room {
+    private static func domain(_ record: MothSchemaV4.RoomRecord) -> Room {
         Room(
             id: record.id,
             name: record.name,
@@ -452,22 +499,33 @@ public final class MothStore {
         )
     }
 
-    private static func domain(_ record: MothSchemaV3.CustomCopingStrategyRecord) -> CustomCopingStrategy {
+    private static func domain(_ record: MothSchemaV4.CustomCopingStrategyRecord) -> CustomCopingStrategy {
         CustomCopingStrategy(id: record.id, title: record.title, createdAt: record.createdAt)
     }
 
-    private static func domain(_ record: MothSchemaV3.CalibrationRecord) -> DeviceCalibration {
+    /// A curve that no longer validates is dropped, not fatal: the calibration still serves
+    /// frequency, and Tier 1 simply stays off.
+    private static func domain(_ record: MothSchemaV4.CalibrationRecord) -> DeviceCalibration {
         DeviceCalibration(
             id: record.id,
             deviceModelIdentifier: record.deviceModelIdentifier,
             lineReadoutTime: record.lineReadoutTime,
             referenceFrequencyHz: record.referenceFrequencyHz,
             calibratedLineCount: record.calibratedLineCount,
+            format: CaptureFormatSignature(
+                width: record.formatWidth,
+                height: record.formatHeight,
+                frameRate: record.formatFrameRate,
+                pixelFormat: UInt32(truncatingIfNeeded: record.formatPixelFormat),
+                exposureDuration: record.formatExposureDuration
+            ),
+            responseCurve: record.responseCurveData.flatMap { try? ResponseCurve(data: $0) },
+            calibrationVersion: record.calibrationVersion,
             capturedAt: record.capturedAt
         )
     }
 
-    private static func domain(_ record: MothSchemaV3.RoomMeasurementRecord) -> RoomMeasurement? {
+    private static func domain(_ record: MothSchemaV4.RoomMeasurementRecord) -> RoomMeasurement? {
         guard let flicker = try? JSONDecoder().decode(FlickerResult.self, from: record.flickerData),
               let roomID = record.room?.id
         else {

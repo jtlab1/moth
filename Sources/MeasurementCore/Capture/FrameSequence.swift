@@ -193,8 +193,10 @@ public final class FrameSequenceBuilder {
         nominalFrameRate: Double,
         region: CaptureRegion? = nil,
         lineReadoutTime: TimeInterval?,
+        responseCurve: ResponseCurve? = nil,
         deviceCapability: DeviceCapabilityProfile,
-        startedAt: Date
+        startedAt: Date,
+        conditions: CaptureConditions? = nil
     ) -> FrameSequence {
         let metadata = CaptureMetadata(
             dimensions: dimensions,
@@ -203,8 +205,10 @@ public final class FrameSequenceBuilder {
             region: region,
             frames: frames,
             lineReadoutTime: lineReadoutTime,
+            responseCurve: responseCurve,
             deviceCapability: deviceCapability,
-            startedAt: startedAt
+            startedAt: startedAt,
+            conditions: conditions
         )
         let sequence = FrameSequence(buffers: buffers, metadata: metadata)
         buffers.removeAll(keepingCapacity: true)

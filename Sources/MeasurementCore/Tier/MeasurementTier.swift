@@ -6,10 +6,13 @@ public enum MeasurementTier: String, Sendable, Codable, CaseIterable {
     /// Recoverable: frequency, modulation depth, IEEE 1789 verdict.
     case tier1
 
-    /// Line readout time known, but amplitude can't be trusted. Recoverable: frequency.
+    /// Line readout time known, but amplitude can't be trusted: the camera's light response
+    /// hasn't been measured, or this capture couldn't hold the standard exposure.
+    /// Recoverable: frequency.
     case tier2
 
-    /// Uncalibrated, so rows can't map to time. Recoverable: presence only.
+    /// Uncalibrated (or calibrated under an older method), so rows can't map to time.
+    /// Recoverable: presence only.
     case tier3
 }
 
@@ -38,23 +41,25 @@ extension MeasurementTier {
         switch self {
         case .tier1:
             return """
-            This iPhone can hold its exposure steady and record light levels \
-            proportionally, so Moth can measure how fast the light flickers, how \
-            deep the flicker is, and compare both against the IEEE 1789 guideline.
+            This iPhone is calibrated and held Moth's standard exposure, so Moth can \
+            measure how fast the light flickers, how deep the flicker is, and compare \
+            both against the IEEE 1789 guideline.
             """
         case .tier2:
             return """
             This iPhone is calibrated, so Moth can measure how fast the light \
-            flickers. It cannot measure how deep the flicker is on this device, and \
-            without depth there is no honest way to give an IEEE 1789 verdict. The \
-            frequency shown is a real measurement.
+            flickers, and the frequency shown is a real measurement. It couldn't \
+            measure how deep the flicker is this time: either calibration hasn't yet \
+            measured how this camera responds to light (recalibrating can finish that \
+            step), or the camera couldn't hold Moth's standard exposure during this \
+            capture. Without depth there is no honest way to give an IEEE 1789 verdict.
             """
         case .tier3:
             return """
-            This iPhone has not been calibrated yet, so Moth can tell you whether \
-            the light is flickering but not how fast. Running Calibration once, using \
-            an older fluorescent or incandescent fixture, unlocks frequency \
-            measurement.
+            This iPhone has not been calibrated for Moth's current measurement method, \
+            so Moth can tell you whether the light is flickering but not how fast. \
+            Running Calibration once, using an older fluorescent or incandescent \
+            fixture, unlocks frequency and depth measurement.
             """
         }
     }

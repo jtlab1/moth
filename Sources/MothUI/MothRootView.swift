@@ -5,7 +5,8 @@ import SwiftUI
 
 /// Onboarding, then camera access, then a first calibration gate everything: an
 /// uncalibrated Tier 3 reading is a much weaker product than a one-time calibration unlocks.
-/// The gate never reappears, but Measure still refuses a stale calibration.
+/// The gate never reappears, but Measure still refuses a stale calibration. A calibration
+/// from an older measurement method is different: it gets a non-blocking banner, not the gate.
 public struct MothRootView: View {
     private enum Tab: Hashable { case measure, rooms, buildings, settings }
 
@@ -43,6 +44,8 @@ public struct MothRootView: View {
     /// dismisses another is a SwiftUI race.
     @State private var roomPendingMeasurementAfterCreation: Room?
     @State private var roomBeingMeasured: Room?
+    /// Consumed in the measure sheet's `onDismiss`, like `roomPendingMeasurementAfterCreation`.
+    @State private var recalibrateAfterMeasureSheet = false
     @State private var roomPendingBuildingAssignment: Room?
     @State private var roomPendingRename: Room?
     @State private var buildingPendingRename: Building?
@@ -134,7 +137,11 @@ public struct MothRootView: View {
             } message: {
                 Text(storeErrorMessage ?? "")
             }
-            .sheet(isPresented: $showingCalibrationSheet) {
+            .sheet(
+                isPresented: $showingCalibrationSheet,
+                // Covers Close and swipe-down alike: no capture keeps running unseen.
+                onDismiss: { calibrationViewModel?.cancel() }
+            ) {
                 NavigationStack {
                     calibrationScreen
                         .mothCenteredTitle("Calibration")
@@ -179,15 +186,24 @@ public struct MothRootView: View {
 
     // MARK: - Calibration state
 
-    /// Ignores the mains setting; drives the one-time first-run gate.
+    /// Ignores the mains setting; drives the one-time first-run gate. Format-aware once the
+    /// camera has reported its standard format, so a calibration from another format reads as
+    /// `.outdated` before a capture, not only inside one.
     private var storedCalibrationState: CalibrationState {
-        store.calibrationState(forDeviceModelIdentifier: DeviceIdentity.modelIdentifier)
+        let model = DeviceIdentity.modelIdentifier
+        if let format = measureViewModel?.captureFormat {
+            return store.calibrationState(forDeviceModelIdentifier: model, format: format)
+        }
+        return store.calibrationState(forDeviceModelIdentifier: model)
     }
 
-    /// Stays true once set, so the full-screen gate never reappears.
+    /// Stays true once set, so the full-screen gate never reappears. An outdated calibration
+    /// still counts: that user has calibrated before and gets a banner instead.
     private var hasEverCalibratedThisDevice: Bool {
-        if case .calibrated = storedCalibrationState { return true }
-        return false
+        switch storedCalibrationState {
+        case .calibrated, .outdated: return true
+        default: return false
+        }
     }
 
     /// A reading, not a stored flag, so nothing has to be written when mains changes.
@@ -217,10 +233,17 @@ public struct MothRootView: View {
     /// Shared by the Measure tab and the "Measure This Room" sheet.
     @ViewBuilder
     private func measureContent(presetRoomName: String? = nil, showsLivePreview: Bool = true) -> some View {
-        if !calibrationState.isCalibrated {
+        // Outdated still measures (presence only, Tier 3) under a banner; anything else
+        // uncalibrated is blocked until calibrated.
+        if !calibrationState.isCalibrated && !calibrationState.isOutdated {
             calibrationRequiredPrompt
         } else if let measureViewModel {
-            MeasureView(viewModel: measureViewModel, presetRoomName: presetRoomName, showsLivePreview: showsLivePreview) { draft, comfortRating, roomName in
+            MeasureView(
+                viewModel: measureViewModel,
+                presetRoomName: presetRoomName,
+                showsLivePreview: showsLivePreview,
+                onRecalibrate: calibrationState.isOutdated ? { beginRecalibrating() } : nil
+            ) { draft, comfortRating, roomName in
                 saveMeasurement(draft: draft, comfortRating: comfortRating, roomName: roomName)
             }
         } else {
@@ -236,11 +259,11 @@ public struct MothRootView: View {
             Text("Calibration needed")
                 .font(.moth(.title2, weight: .bold))
                 .foregroundStyle(palette.primaryText)
-            Text("Moth needs a valid calibration on this phone before it can measure, so every reading can compare fairly against IEEE 1789. It takes about ten seconds.")
+            Text("Moth needs a valid calibration on this phone before it can measure, so every reading can compare fairly against IEEE 1789. It takes about twenty seconds.")
                 .font(.body)
                 .foregroundStyle(palette.secondaryText)
                 .multilineTextAlignment(.center)
-            Button("Calibrate now") { showingCalibrationSheet = true }
+            Button("Calibrate now") { beginRecalibrating() }
                 .buttonStyle(.mothPrimary)
                 .padding(.top, 8)
         }
@@ -248,6 +271,17 @@ public struct MothRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .mothScreenBackground()
         .mothAppear()
+    }
+
+    /// From inside a room's measure sheet, waits for it to close first (see
+    /// `roomPendingMeasurementAfterCreation` for why).
+    private func beginRecalibrating() {
+        if roomBeingMeasured != nil {
+            recalibrateAfterMeasureSheet = true
+            roomBeingMeasured = nil
+        } else {
+            showingCalibrationSheet = true
+        }
     }
 
     private func ensureMeasureViewModel() {
@@ -441,6 +475,10 @@ public struct MothRootView: View {
                     // `measureViewModel` is shared with the Measure tab, so a stuck state must
                     // not survive the sheet closing.
                     measureViewModel?.reset()
+                    if recalibrateAfterMeasureSheet {
+                        recalibrateAfterMeasureSheet = false
+                        showingCalibrationSheet = true
+                    }
                 }
             ) { room in
                 NavigationStack {
@@ -649,7 +687,7 @@ public struct MothRootView: View {
             SettingsView(
                 settings: $settings,
                 calibrationState: calibrationState,
-                onRecalibrate: { showingCalibrationSheet = true },
+                onRecalibrate: { beginRecalibrating() },
                 onResetCalibration: { resetCalibration() },
                 onForgetEverything: { forgetEverything() }
             )
@@ -711,6 +749,7 @@ public struct MothRootView: View {
                 }
                 showingCalibrationSheet = false
                 self.calibrationViewModel = nil
+                Task { await measureViewModel?.refreshCaptureFormat() }
             }
         }
     }

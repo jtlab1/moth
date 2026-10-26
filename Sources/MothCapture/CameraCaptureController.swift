@@ -29,6 +29,13 @@ public struct CaptureProgress: Sendable, Equatable {
 
 /// `@unchecked Sendable`: every session, device, and capture-state mutation happens on
 /// `sessionQueue`, which is also the sample-buffer delegate queue.
+///
+/// Every capture runs under `CaptureStandard`: one format (29 fps, ~1920×1080, 8-bit 4:2:0),
+/// the standard exposure with ISO alone adapting, and forced imaging state (focus, white
+/// balance, HDR, colour space, tone mapping, stabilization…). Preview meters continuously;
+/// a capture switches to custom exposure, discards frames until it has settled, records
+/// `settledFrames`-gated frames and the conditions they were taken under, then hands
+/// exposure back to continuous AE.
 public final class CameraCaptureController: NSObject, @unchecked Sendable {
 
     /// Reached, the capture stops early: a short sequence analysis can reject beats a
@@ -42,21 +49,40 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
     private var device: AVCaptureDevice?
     private var isConfigured = false
 
+    // Fixed at configuration; touched only on `sessionQueue`.
+    private var standardFormat: AVCaptureDevice.Format?
+    private var pinnedFrameRate: Double = CaptureStandard.frameRate
+    private var outputPixelFormat: UInt32 = CaptureStandard.preferredPixelFormat
+
+    /// The clock exposure completion handlers report in.
+    private var deviceClock: CMClock?
+
     // Touched only on `sessionQueue`.
     private var builder: FrameSequenceBuilder?
     private var copier: FrameCopier?
     private var continuation: CheckedContinuation<FrameSequence, Error>?
-    private var captureStart: TimeInterval = 0
     private var captureDuration: TimeInterval = 0
     private var retainedBytes = 0
     private var lineReadoutTimeForCapture: TimeInterval?
+    private var responseCurveForCapture: ResponseCurve?
     private var capabilityForCapture: DeviceCapabilityProfile?
     private var progressHandler: (@Sendable (CaptureProgress) -> Void)?
     private var captureStartedAt = Date()
+    private var settleGate = SettleGate()
+    private var conditionsAccumulator = CaptureConditionsAccumulator()
+    private var thermalStateAtStart: Int?
+    private var deliveredPixelFormat: UInt32?
+
+    /// True while a capture holds custom exposure; `finishCapture` hands it back to AE.
+    private var exposureOverridden = false
+
+    /// Metering already says the scene is too dim at maximum ISO: warn from the first frame.
+    private var meteringPredictsDim = false
 
     /// Same raw 8-bit code `RowBrightnessExtractor` classifies rows in.
     private var liveLuminanceEMA: Float?
     private var lastLiveSampleTime: TimeInterval?
+    private var liveBlackPoint: Float = 0
     private var activeCaptureID: UUID?
     /// A cancellation that lands before setup reaches `sessionQueue` would otherwise be
     /// lost, leaving `continuation` waiting on frames nobody delivers.
@@ -95,7 +121,8 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         // Any named preset would override the chosen format, and with it the frame rate.
         session.sessionPreset = AVCaptureSession.measurementPreset
 
-        // Wide colour inserts an unknown transfer curve into the signal.
+        // Wide colour inserts an unknown transfer curve into the signal, and the session would
+        // otherwise re-pick the colour space behind `applyStandardImagingState`.
         AVCaptureDevice.disableWideColor(on: session)
 
         let input: AVCaptureDeviceInput
@@ -110,10 +137,11 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
             throw CaptureSetupError.inputUnavailable("session refused the camera input")
         }
         session.addInput(input)
+        deviceClock = input.ports.first { $0.mediaType == .video }?.clock
 
         videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
         // A dropped frame is indistinguishable from signal once frames are an array; the byte
-        // budget bounds memory instead.
+        // budget bounds memory instead. Drops that still happen are counted.
         videoOutput.alwaysDiscardsLateVideoFrames = false
         guard session.canAddOutput(videoOutput) else {
             session.commitConfiguration()
@@ -121,15 +149,24 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         }
         session.addOutput(videoOutput)
 
+        do {
+            try configureDevice(device)
+        } catch {
+            session.commitConfiguration()
+            throw error
+        }
+        configureOutput()
         session.commitConfiguration()
 
-        try configureDevice(device)
         self.device = device
         self.isConfigured = true
     }
 
     private func configureDevice(_ device: AVCaptureDevice) throws {
         dispatchPrecondition(condition: .onQueue(sessionQueue))
+        guard let format = Self.selectFormat(for: device) else {
+            throw CaptureSetupError.noSuitableFormat
+        }
         do {
             try device.lockForConfiguration()
         } catch {
@@ -137,61 +174,61 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         }
         defer { device.unlockForConfiguration() }
 
-        guard let format = Self.selectFormat(for: device) else {
-            throw CaptureSetupError.noSuitableFormat
-        }
-        device.activeFormat = format
-
-        // Pin both ends: setting only the minimum lets the device slow down in dim light.
-        let maxRate = format.videoSupportedFrameRateRanges
-            .map(\.maxFrameRate)
-            .max() ?? 30
-        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(maxRate.rounded()))
-        device.activeVideoMinFrameDuration = frameDuration
-        device.activeVideoMaxFrameDuration = frameDuration
-
-        // Video HDR is a non-linear, scene-dependent transform of the measured quantity.
-        device.disableVideoHDRIfSupported()
-
-        // Locked for stability: a refocus or white-balance shift would read as modulation.
-        if device.isFocusModeSupported(.locked) {
-            device.focusMode = .locked
-        }
-        if device.isWhiteBalanceModeSupported(.locked) {
-            device.whiteBalanceMode = .locked
-        }
-
-        // `configureExposure` runs with the configuration lock held.
-        configureExposure(for: device, frameDuration: frameDuration)
+        standardFormat = format
+        applyStandardFormatLocked(device)
+        device.applyStandardImagingState()
+        // Colour space and HDR changes can reset the frame durations; pin again.
+        applyStandardFormatLocked(device)
+        // Preview meters continuously; a capture converts that metering to the standard.
+        device.restoreContinuousAutoExposure()
     }
 
-    // Custom exposure lands asynchronously, so early frames carry the old values; that's
-    // why metadata records read-back values per frame.
-    private func configureExposure(for device: AVCaptureDevice, frameDuration: CMTime) {
-        guard device.isExposureModeSupported(.custom) else { return }
+    /// Requires the device configuration lock. Re-run at capture start in case a session
+    /// restart reset the format or frame rate.
+    private func applyStandardFormatLocked(_ device: AVCaptureDevice) {
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        guard let standardFormat else { return }
+        if device.activeFormat != standardFormat {
+            device.activeFormat = standardFormat
+        }
+        // Pin both ends: setting only the minimum lets the device slow down in dim light.
+        let frameDuration = Self.standardFrameDuration
+        if device.activeVideoMinFrameDuration != frameDuration {
+            device.activeVideoMinFrameDuration = frameDuration
+        }
+        if device.activeVideoMaxFrameDuration != frameDuration {
+            device.activeVideoMaxFrameDuration = frameDuration
+        }
+        let readBack = CMTimeGetSeconds(device.activeVideoMinFrameDuration)
+        pinnedFrameRate = readBack > 0 && abs(1 / readBack - CaptureStandard.frameRate) / CaptureStandard.frameRate < 1e-3
+            ? CaptureStandard.frameRate
+            : (readBack > 0 ? 1 / readBack : CaptureStandard.frameRate)
+    }
 
-        // Static, not converge-then-lock: nothing is aimed at yet. Biased short and low-ISO
-        // because saturation and dim signal both fail safely with their own guidance.
-        let format = device.activeFormat
-        let minDuration = format.minExposureSeconds
-        let maxDuration = format.maxExposureSeconds
+    /// Exactly 1/29 s.
+    static let standardFrameDuration = CMTime(value: 1000, timescale: CMTimeScale((CaptureStandard.frameRate * 1000).rounded()))
 
-        // `maxDuration` is the format's absolute ceiling, not the pinned rate's frame period.
-        // Exposing longer than a frame silently throttles delivery, so bound by `frameDuration`.
-        let frameDurationSeconds = CMTimeGetSeconds(frameDuration)
-        let frameBound = frameDurationSeconds * 0.8
-        let target = minDuration + (maxDuration - minDuration) * 0.1
-        let exposureDuration = CMTime(
-            seconds: min(max(min(target, frameBound), minDuration), maxDuration),
-            preferredTimescale: 1_000_000
-        )
-
-        let minISO = format.minISOValue
-        let maxISO = format.maxISOValue
-        let targetISO = minISO + (maxISO - minISO) * 0.15
-        let iso = min(max(targetISO, minISO), maxISO)
-
-        device.setCustomExposure(duration: exposureDuration, iso: iso)
+    /// Requests full-range 4:2:0 explicitly: left to itself the output may pick video range
+    /// (or BGRA) and the response curve would describe a different encoding.
+    private func configureOutput() {
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        let available = videoOutput.availableVideoPixelFormatTypes.map { UInt32($0) }
+        let native = standardFormat.map { CMFormatDescriptionGetMediaSubType($0.formatDescription) }
+        let requested: UInt32?
+        if available.contains(CaptureStandard.preferredPixelFormat) {
+            requested = CaptureStandard.preferredPixelFormat
+        } else if let native, CaptureStandard.acceptedPixelFormats.contains(native), available.contains(native) {
+            requested = native
+        } else {
+            requested = available.first { CaptureStandard.acceptedPixelFormats.contains($0) }
+        }
+        if let requested {
+            videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: requested]
+            outputPixelFormat = requested
+        } else {
+            outputPixelFormat = native ?? CaptureStandard.preferredPixelFormat
+        }
+        videoOutput.connection(with: .video)?.applyStandardBufferState()
     }
 
     // MARK: - Preview
@@ -226,20 +263,23 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
     private func capabilityLocked(calibration: DeviceCalibration?) -> DeviceCapabilityProfile {
         dispatchPrecondition(condition: .onQueue(sessionQueue))
         let model = DeviceIdentity.modelIdentifier
-        let isCalibrated = calibration?.appliesTo(modelIdentifier: model) ?? false
+        let isCalibrated = activeFormatSignatureLocked().map { signature in
+            calibration?.appliesTo(modelIdentifier: model, format: signature) ?? false
+        } ?? false
 
-        guard let device, let format = device.activeFormat as AVCaptureDevice.Format? else {
+        guard let device else {
             return DeviceCapabilityProfile(
                 modelIdentifier: model,
                 supportsManualExposure: false,
                 exposureDurationRange: 1e-5...1,
                 isoRange: 1...100,
-                maximumFrameRate: 30,
+                maximumFrameRate: CaptureStandard.frameRate,
                 providesLinearCapture: false,
                 isCalibrated: isCalibrated
             )
         }
 
+        let format = standardFormat ?? device.activeFormat
         let minDuration = format.minExposureSeconds
         let maxDuration = format.maxExposureSeconds
 
@@ -248,9 +288,68 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
             supportsManualExposure: device.isExposureModeSupported(.custom),
             exposureDurationRange: minDuration...max(minDuration, maxDuration),
             isoRange: format.minISOValue...max(format.minISOValue, format.maxISOValue),
-            maximumFrameRate: format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 30,
+            // The pinned rate: the standard never runs faster.
+            maximumFrameRate: pinnedFrameRate,
             providesLinearCapture: Self.believesCaptureIsLinear(device: device),
             isCalibrated: isCalibrated
+        )
+    }
+
+    /// `nil` before `prepare()`. Calibration records this so `capabilityLocked` can match it.
+    public func activeFormatSignature() async -> CaptureFormatSignature? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<CaptureFormatSignature?, Never>) in
+            sessionQueue.async {
+                continuation.resume(returning: self.activeFormatSignatureLocked())
+            }
+        }
+    }
+
+    /// The standard format's ISO range, which the response sweep spans. `nil` before `prepare()`.
+    public func standardISORange() async -> ClosedRange<Float>? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<ClosedRange<Float>?, Never>) in
+            sessionQueue.async {
+                guard self.isConfigured, let format = self.standardFormat ?? self.device?.activeFormat else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: format.minISOValue...max(format.minISOValue, format.maxISOValue))
+            }
+        }
+    }
+
+    /// The ISO a `.metered` capture would use right now: preview AE's reading converted to
+    /// the standard exposure. The response sweep centres on it so every step sees the scene.
+    public func meteredStandardISO() async -> Float? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Float?, Never>) in
+            sessionQueue.async {
+                guard self.isConfigured, let device = self.device else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let capability = self.capabilityLocked(calibration: nil)
+                let plan = Self.exposurePlan(for: .metered, device: device, capability: capability)
+                continuation.resume(returning: plan.iso)
+            }
+        }
+    }
+
+    /// What a calibration must match to apply to captures from the configured format: the
+    /// standard format's buffer size, the pinned rate, the pixel format the output delivers,
+    /// and the standard exposure (clamped to the format). Deterministic, never the read-back
+    /// exposure, which wanders under preview AE.
+    private func activeFormatSignatureLocked(pixelFormat: UInt32? = nil) -> CaptureFormatSignature? {
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        guard isConfigured || device != nil, let format = standardFormat ?? device?.activeFormat else { return nil }
+        let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        let minExposure = format.minExposureSeconds
+        return CaptureFormatSignature(
+            width: Int(dimensions.width),
+            height: Int(dimensions.height),
+            frameRate: pinnedFrameRate,
+            pixelFormat: pixelFormat ?? deliveredPixelFormat ?? outputPixelFormat,
+            exposureDuration: CaptureStandard.exposureDuration(
+                clampedTo: minExposure...max(minExposure, format.maxExposureSeconds)
+            )
         )
     }
 
@@ -267,12 +366,14 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
     // MARK: - Capture
 
     /// Requires a running session. Cancelling the task or `stopPreview()` ends it with
-    /// `.cancelled`.
+    /// `.cancelled`. `duration` is settled time: frames before the custom exposure lands, and
+    /// `CaptureStandard.settleFrames` after, are discarded and don't count.
     /// `onProgress` is called on the capture queue.
     public func capture(
         duration: TimeInterval,
         lineReadoutTime: TimeInterval?,
         calibration: DeviceCalibration?,
+        exposure: CaptureExposure = .metered,
         retention: FrameRetentionPolicy = .default,
         onProgress: (@Sendable (CaptureProgress) -> Void)? = nil
     ) async throws -> FrameSequence {
@@ -285,7 +386,7 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
                         continuation.resume(throwing: AnalysisError.cancelled)
                         return
                     }
-                    guard self.isConfigured else {
+                    guard self.isConfigured, let device = self.device else {
                         continuation.resume(throwing: CaptureSetupError.notPrepared)
                         return
                     }
@@ -298,23 +399,69 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
                         continuation.resume(throwing: CaptureSetupError.captureAlreadyRunning)
                         return
                     }
+                    do {
+                        try device.lockForConfiguration()
+                    } catch {
+                        continuation.resume(throwing: CaptureSetupError.deviceLockFailed(error.localizedDescription))
+                        return
+                    }
+
+                    self.applyStandardFormatLocked(device)
+                    device.applyStandardImagingState()
+                    // Colour space and HDR changes can reset the frame durations; pin again.
+                    self.applyStandardFormatLocked(device)
 
                     let capability = self.capabilityLocked(calibration: calibration)
+                    let plan = Self.exposurePlan(for: exposure, device: device, capability: capability)
                     let maxFrames = Int((capability.maximumFrameRate * duration).rounded(.up)) + 30
 
                     self.builder = FrameSequenceBuilder(maximumFrameCount: maxFrames)
                     self.copier = FrameCopier(policy: retention)
                     self.continuation = continuation
                     self.activeCaptureID = captureID
-                    self.captureStart = 0
                     self.captureDuration = duration
                     self.retainedBytes = 0
-                    self.lineReadoutTimeForCapture = lineReadoutTime
+                    // Only a calibration that applies to this format may shape the signal: its
+                    // readout time as much as its curve, or an outdated or foreign calibration
+                    // would steer the frequency search under a Tier 3 label.
+                    let inputs = Self.calibrationInputs(
+                        lineReadoutTime: lineReadoutTime, calibration: calibration, applies: capability.isCalibrated
+                    )
+                    self.lineReadoutTimeForCapture = inputs.lineReadoutTime
+                    self.responseCurveForCapture = inputs.responseCurve
                     self.capabilityForCapture = capability
                     self.progressHandler = onProgress
                     self.captureStartedAt = Date()
+                    self.settleGate = SettleGate()
+                    self.conditionsAccumulator = CaptureConditionsAccumulator(expectedFrameCount: maxFrames)
+                    self.thermalStateAtStart = ProcessInfo.processInfo.thermalState.rawValue
+                    self.deliveredPixelFormat = nil
+                    self.meteringPredictsDim = plan.predictsDim
                     self.liveLuminanceEMA = nil
                     self.lastLiveSampleTime = nil
+                    self.liveBlackPoint = Self.blackPoint(for: self.outputPixelFormat)
+
+                    let applied = device.setCustomExposure(
+                        duration: plan.exposureDuration,
+                        iso: plan.iso
+                    ) { [weak self] syncTime in
+                        guard let self else { return }
+                        self.sessionQueue.async {
+                            self.exposureApplied(syncTime: syncTime, captureID: captureID)
+                        }
+                    }
+                    device.unlockForConfiguration()
+                    self.exposureOverridden = applied
+                    if !applied {
+                        // Nothing to wait for; read-back values (and the analyser) will show
+                        // the capture isn't at the standard exposure.
+                        self.settleGate.exposureApplied(syncTime: -.infinity)
+                    }
+
+                    // Before any frame arrives, so a hopeless scene warns immediately.
+                    onProgress?(CaptureProgress(
+                        framesCaptured: 0, elapsed: 0, duration: duration, isDim: plan.predictsDim
+                    ))
                 }
             }
         } onCancel: {
@@ -322,6 +469,49 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
                 self.cancelCapture(captureID)
             }
         }
+    }
+
+    /// What a calibration contributes to a capture: both its readout time and curve when it
+    /// applies to the capture's format, neither otherwise.
+    static func calibrationInputs(
+        lineReadoutTime: TimeInterval?,
+        calibration: DeviceCalibration?,
+        applies: Bool
+    ) -> (lineReadoutTime: TimeInterval?, responseCurve: ResponseCurve?) {
+        guard applies else { return (nil, nil) }
+        return (lineReadoutTime, calibration?.responseCurve)
+    }
+
+    private static func exposurePlan(
+        for exposure: CaptureExposure,
+        device: AVCaptureDevice,
+        capability: DeviceCapabilityProfile
+    ) -> ExposurePlan {
+        switch exposure {
+        case .metered:
+            // Read back from continuous AE, which has been metering the scene during preview.
+            return ExposurePlan.metered(
+                autoExposureDuration: device.currentExposureSeconds,
+                autoExposureISO: device.currentISO,
+                exposureRange: capability.exposureDurationRange,
+                isoRange: capability.isoRange
+            )
+        case .fixedISO(let iso):
+            return ExposurePlan.fixed(
+                iso: iso,
+                exposureRange: capability.exposureDurationRange,
+                isoRange: capability.isoRange
+            )
+        }
+    }
+
+    private func exposureApplied(syncTime: CMTime, captureID: UUID) {
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        guard activeCaptureID == captureID, syncTime.isNumeric else { return }
+        let bufferTime = session.bufferTime(fromDeviceTime: syncTime, deviceClock: deviceClock)
+        let seconds = CMTimeGetSeconds(bufferTime)
+        guard seconds.isFinite else { return }
+        settleGate.exposureApplied(syncTime: seconds)
     }
 
     private func cancelCapture(_ captureID: UUID) {
@@ -333,7 +523,8 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Resumes the waiting caller exactly once.
+    /// Resumes the waiting caller exactly once, and always hands exposure back to AE so the
+    /// preview (and the next capture's metering) sees the scene again.
     private func finishCapture(with result: Result<FrameSequence, Error>) {
         dispatchPrecondition(condition: .onQueue(sessionQueue))
         guard let continuation else { return }
@@ -347,24 +538,40 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         capabilityForCapture = nil
         liveLuminanceEMA = nil
         lastLiveSampleTime = nil
+        meteringPredictsDim = false
+        restorePreviewExposure()
         continuation.resume(with: result)
+    }
+
+    private func restorePreviewExposure() {
+        dispatchPrecondition(condition: .onQueue(sessionQueue))
+        guard exposureOverridden, let device else { return }
+        exposureOverridden = false
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.restoreContinuousAutoExposure()
+        device.unlockForConfiguration()
     }
 
     // MARK: - Live dimness sampling
 
-    /// Same boundary `RowBrightnessExtractor` calls "crushed", so the live warning predicts the
-    /// failure the capture would hit anyway.
-    private static let dimLuminanceThreshold: Float = 3
+    /// Same boundary `RowBrightnessExtractor` calls "crushed", measured above the pixel
+    /// format's black so video range (black at 16) can still warn.
+    private static let dimLuminanceMargin: Float = 3
 
-    /// Time-based so the indicator behaves the same at 30 and 240 fps.
+    /// Time-based so the indicator behaves the same at any frame rate.
     private static let liveDimTimeConstant: TimeInterval = 0.3
 
-    /// A sparse grid rather than full row means: this runs on every frame, up to 240 fps, and
-    /// must never be what makes the queue drop frames.
+    static func blackPoint(for pixelFormat: UInt32) -> Float {
+        pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ? 16 : 0
+    }
+
+    /// A sparse grid rather than full row means: this runs on every frame, settling ones
+    /// included, and must never be what makes the queue drop frames.
     private func updateLiveDimState(sampling pixelBuffer: CVPixelBuffer, at presentationTime: TimeInterval) -> Bool {
         dispatchPrecondition(condition: .onQueue(sessionQueue))
+        let threshold = liveBlackPoint + Self.dimLuminanceMargin
         guard let sample = Self.sparseLumaSample(pixelBuffer) else {
-            return (liveLuminanceEMA ?? 255) < Self.dimLuminanceThreshold
+            return (liveLuminanceEMA ?? 255) < threshold
         }
 
         if let previousEMA = liveLuminanceEMA, let lastTime = lastLiveSampleTime {
@@ -376,7 +583,7 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         }
         lastLiveSampleTime = presentationTime
 
-        return liveLuminanceEMA! < Self.dimLuminanceThreshold
+        return liveLuminanceEMA! < threshold
     }
 
     /// Internal so tests can pin the grid math.
@@ -422,41 +629,15 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         return discovery.devices.first ?? AVCaptureDevice.default(for: .video)
     }
 
-    /// Priorities: full-range 4:2:0 (≈15% more amplitude resolution than video range),
-    /// frame rate, then height (rows are the time axis); width only adds noise averaging.
+    /// Per `CaptureStandard` via `CaptureFormatSelector`; never by frame rate. `nil` rather
+    /// than an off-standard fallback: a silently different format would make every reading
+    /// incomparable.
     static func selectFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
-        var best: AVCaptureDevice.Format?
-        var bestScore = -Double.infinity
-
-        for format in device.formats {
-            let subtype = CMFormatDescriptionGetMediaSubType(format.formatDescription)
-            let isFullRange = subtype == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-            let isVideoRange = subtype == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-            guard isFullRange || isVideoRange else { continue }
-
-            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-            let maxRate = format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
-            guard maxRate > 0 else { continue }
-
-            var score = 0.0
-            score += maxRate * 10                      // frame rate dominates
-            score += Double(dimensions.height) * 0.5   // rows are the time axis
-            score += isFullRange ? 200 : 0
-            if dimensions.width > 1920 {
-                score -= Double(dimensions.width - 1920) * 0.2
-            }
-            if device.isExposureModeSupported(.custom) {
-                // A long minimum exposure integrates across cycles and flattens the modulation.
-                let minExposure = format.minExposureSeconds
-                if minExposure > 0 { score += min(200, 1 / minExposure * 0.02) }
-            }
-
-            if score > bestScore {
-                bestScore = score
-                best = format
-            }
+        let formats = device.formats
+        guard let index = CaptureFormatSelector.bestIndex(of: formats.map(\.captureDescriptor)) else {
+            return nil
         }
-        return best ?? device.formats.last
+        return formats[index]
     }
 }
 
@@ -474,11 +655,23 @@ extension CameraCaptureController: AVCaptureVideoDataOutputSampleBufferDelegate 
         guard let sourceBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         let presentationTime = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-        if captureStart == 0 { captureStart = presentationTime }
-        let elapsed = presentationTime - captureStart
+        if deliveredPixelFormat == nil {
+            let format = CVPixelBufferGetPixelFormatType(sourceBuffer)
+            deliveredPixelFormat = format
+            liveBlackPoint = Self.blackPoint(for: format)
+        }
 
-        // Read back, not requested. Under continuous auto these may lag a frame or two, which
-        // is why `hasStableExposure` exists.
+        let isDim = updateLiveDimState(sampling: sourceBuffer, at: presentationTime) || meteringPredictsDim
+
+        guard settleGate.admit(presentationTime: presentationTime) else {
+            progressHandler?(CaptureProgress(
+                framesCaptured: 0, elapsed: 0, duration: captureDuration, isDim: isDim
+            ))
+            return
+        }
+        let elapsed = settleGate.elapsed(at: presentationTime)
+
+        // Read back, not requested. After settling these match what the sensor used.
         let exposureDuration = device.currentExposureSeconds
         let iso = device.currentISO
         let mode: ExposureMode
@@ -487,8 +680,6 @@ extension CameraCaptureController: AVCaptureVideoDataOutputSampleBufferDelegate 
         case .locked: mode = .locked
         default: mode = .automatic
         }
-
-        let isDim = updateLiveDimState(sampling: sourceBuffer, at: presentationTime)
 
         guard let retained = copier.retain(sourceBuffer) else {
             finishCapture(with: .failure(AnalysisError.insufficientSignal(
@@ -504,6 +695,11 @@ extension CameraCaptureController: AVCaptureVideoDataOutputSampleBufferDelegate 
             iso: iso,
             exposureMode: mode,
             lensAperture: device.currentLensAperture
+        )
+        conditionsAccumulator.recordFrame(
+            presentationTime: presentationTime,
+            exposureDuration: exposureDuration,
+            iso: iso
         )
 
         retainedBytes += CVPixelBufferGetDataSize(retained)
@@ -529,7 +725,9 @@ extension CameraCaptureController: AVCaptureVideoDataOutputSampleBufferDelegate 
         from connection: AVCaptureConnection
     ) {
         dispatchPrecondition(condition: .onQueue(sessionQueue))
-        guard continuation != nil else { return }
+        // Drops while settling cost nothing; inside the valid window they're a hole in time.
+        guard continuation != nil, settleGate.isSettled else { return }
+        conditionsAccumulator.recordDrop()
     }
 
     private func finalizeCapture() {
@@ -540,17 +738,28 @@ extension CameraCaptureController: AVCaptureVideoDataOutputSampleBufferDelegate 
             return
         }
 
-        let pixelFormat = videoOutput.videoSettings[kCVPixelBufferPixelFormatTypeKey as String] as? UInt32
-            ?? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        // What the buffers actually are, not what was asked for.
+        let pixelFormat = deliveredPixelFormat ?? outputPixelFormat
+        let conditions = activeFormatSignatureLocked(pixelFormat: pixelFormat).map { signature in
+            conditionsAccumulator.conditions(
+                formatSignature: signature,
+                settledFrameCount: settleGate.discardedFrameCount,
+                thermalStateRawValue: thermalStateAtStart,
+                lensPosition: device?.currentLensPosition,
+                whiteBalanceLocked: device?.isWhiteBalanceLocked ?? false
+            )
+        }
 
         let sequence = builder.finalize(
             dimensions: dimensions,
             pixelFormat: pixelFormat,
-            nominalFrameRate: capability.maximumFrameRate,
+            nominalFrameRate: pinnedFrameRate,
             region: copier.region,
             lineReadoutTime: lineReadoutTimeForCapture,
+            responseCurve: responseCurveForCapture,
             deviceCapability: capability,
-            startedAt: captureStartedAt
+            startedAt: captureStartedAt,
+            conditions: conditions
         )
         finishCapture(with: .success(sequence))
     }

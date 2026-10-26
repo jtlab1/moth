@@ -7,50 +7,25 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		6B0C1F45302AE6E9002C4FCC /* TierInvariantTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0C1EF0302AE6E9002C4FCC /* TierInvariantTests.swift */; };
-		6B0C1F4E302AE6E9002C4FCC /* IEEE1789Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0C1EEF302AE6E9002C4FCC /* IEEE1789Tests.swift */; };
-		6B0C1F4F302AE6E9002C4FCC /* CaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0C1EEE302AE6E9002C4FCC /* CaptureTests.swift */; };
-		6B0C1F50302AE6E9002C4FCC /* CalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0C1EED302AE6E9002C4FCC /* CalibrationTests.swift */; };
-		6B0C1F51302AE6E9002C4FCC /* FrameCopierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B0C1EF2302AE6E9002C4FCC /* FrameCopierTests.swift */; };
 		6B0C2002302AE6E9002C4FCC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B0C2001302AE6E9002C4FCC /* Assets.xcassets */; };
 		6B1000000000000000000027 /* MothApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B1000000000000000000026 /* MothApp.swift */; };
 		6B3000000000000000000007 /* MeasurementCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6B3000000000000000000002 /* MeasurementCore */; };
 		6B3000000000000000000008 /* MothCapture in Frameworks */ = {isa = PBXBuildFile; productRef = 6B3000000000000000000003 /* MothCapture */; };
 		6B3000000000000000000009 /* MothUI in Frameworks */ = {isa = PBXBuildFile; productRef = 6B3000000000000000000004 /* MothUI */; };
-		6B300000000000000000000A /* MeasurementCore in Frameworks */ = {isa = PBXBuildFile; productRef = 6B3000000000000000000005 /* MeasurementCore */; };
-		6B300000000000000000000B /* MothCapture in Frameworks */ = {isa = PBXBuildFile; productRef = 6B3000000000000000000006 /* MothCapture */; };
 		6B300000000000000000000D /* MothPersistence in Frameworks */ = {isa = PBXBuildFile; productRef = 6B300000000000000000000C /* MothPersistence */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		6B0C1EAB302A33C4002C4FCC /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 6B0C1E90302A33C3002C4FCC /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 6B0C1E97302A33C3002C4FCC;
-			remoteInfo = Moth;
-		};
-		6B0C1EB5302A33C4002C4FCC /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 6B0C1E90302A33C3002C4FCC /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 6B0C1E97302A33C3002C4FCC;
-			remoteInfo = Moth;
-		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		6B0C1E98302A33C3002C4FCC /* Moth.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Moth.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		6B0C1EAA302A33C4002C4FCC /* MothTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MothTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		6B0C1EB4302A33C4002C4FCC /* MothUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MothUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6B0C1EC7302AE6E9002C4FCC /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
 		6B0C1EC8302AE6E9002C4FCC /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		6B0C1EC9302AE6E9002C4FCC /* swiftpm.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = swiftpm.sh; sourceTree = "<group>"; };
 		6B0C1ECC302AE6E9002C4FCC /* CaptureMetadata.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureMetadata.swift; sourceTree = "<group>"; };
 		6B0C1ECD302AE6E9002C4FCC /* DeviceCapabilityProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCapabilityProfile.swift; sourceTree = "<group>"; };
 		6B0C1ECE302AE6E9002C4FCC /* FrameSequence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameSequence.swift; sourceTree = "<group>"; };
-		6B0C1ED0302AE6E9002C4FCC /* FakeAnalyzers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeAnalyzers.swift; sourceTree = "<group>"; };
-		6B0C1ED1302AE6E9002C4FCC /* SampleData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SampleData.swift; sourceTree = "<group>"; };
 		6B0C1ED3302AE6E9002C4FCC /* DeviceCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCalibration.swift; sourceTree = "<group>"; };
 		6B0C1ED4302AE6E9002C4FCC /* FixtureType.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureType.swift; sourceTree = "<group>"; };
 		6B0C1ED5302AE6E9002C4FCC /* Room.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Room.swift; sourceTree = "<group>"; };
@@ -67,11 +42,6 @@
 		6B0C1EE7302AE6E9002C4FCC /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		6B0C1EE8302AE6E9002C4FCC /* FrameRetention.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameRetention.swift; sourceTree = "<group>"; };
 		6B0C1EE9302AE6E9002C4FCC /* MeasurementRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeasurementRunner.swift; sourceTree = "<group>"; };
-		6B0C1EED302AE6E9002C4FCC /* CalibrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationTests.swift; sourceTree = "<group>"; };
-		6B0C1EEE302AE6E9002C4FCC /* CaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureTests.swift; sourceTree = "<group>"; };
-		6B0C1EEF302AE6E9002C4FCC /* IEEE1789Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IEEE1789Tests.swift; sourceTree = "<group>"; };
-		6B0C1EF0302AE6E9002C4FCC /* TierInvariantTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TierInvariantTests.swift; sourceTree = "<group>"; };
-		6B0C1EF2302AE6E9002C4FCC /* FrameCopierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameCopierTests.swift; sourceTree = "<group>"; };
 		6B0C2001302AE6E9002C4FCC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6B1000000000000000000026 /* MothApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MothApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -88,22 +58,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		6B0C1EA7302A33C4002C4FCC /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				6B300000000000000000000A /* MeasurementCore in Frameworks */,
-				6B300000000000000000000B /* MothCapture in Frameworks */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		6B0C1EB1302A33C4002C4FCC /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -115,7 +69,6 @@
 				6B0C1EC8302AE6E9002C4FCC /* README.md */,
 				6B0C1ECA302AE6E9002C4FCC /* Scripts */,
 				6B0C1EEB302AE6E9002C4FCC /* Sources */,
-				6B0C1EF4302AE6E9002C4FCC /* Tests */,
 				6B0C1E99302A33C3002C4FCC /* Products */,
 			);
 			sourceTree = "<group>";
@@ -124,8 +77,6 @@
 			isa = PBXGroup;
 			children = (
 				6B0C1E98302A33C3002C4FCC /* Moth.app */,
-				6B0C1EAA302A33C4002C4FCC /* MothTests.xctest */,
-				6B0C1EB4302A33C4002C4FCC /* MothUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -146,15 +97,6 @@
 				6B0C1ECE302AE6E9002C4FCC /* FrameSequence.swift */,
 			);
 			path = Capture;
-			sourceTree = "<group>";
-		};
-		6B0C1ED2302AE6E9002C4FCC /* Fakes */ = {
-			isa = PBXGroup;
-			children = (
-				6B0C1ED0302AE6E9002C4FCC /* FakeAnalyzers.swift */,
-				6B0C1ED1302AE6E9002C4FCC /* SampleData.swift */,
-			);
-			path = Fakes;
 			sourceTree = "<group>";
 		};
 		6B0C1ED7302AE6E9002C4FCC /* Model */ = {
@@ -198,7 +140,6 @@
 			isa = PBXGroup;
 			children = (
 				6B0C1ECF302AE6E9002C4FCC /* Capture */,
-				6B0C1ED2302AE6E9002C4FCC /* Fakes */,
 				6B0C1ED7302AE6E9002C4FCC /* Model */,
 				6B0C1ED9302AE6E9002C4FCC /* Protocols */,
 				6B0C1EDE302AE6E9002C4FCC /* Results */,
@@ -228,34 +169,6 @@
 				6B0C1EEA302AE6E9002C4FCC /* MothCapture */,
 			);
 			path = Sources;
-			sourceTree = "<group>";
-		};
-		6B0C1EF1302AE6E9002C4FCC /* MeasurementCoreTests */ = {
-			isa = PBXGroup;
-			children = (
-				6B0C1EED302AE6E9002C4FCC /* CalibrationTests.swift */,
-				6B0C1EEE302AE6E9002C4FCC /* CaptureTests.swift */,
-				6B0C1EEF302AE6E9002C4FCC /* IEEE1789Tests.swift */,
-				6B0C1EF0302AE6E9002C4FCC /* TierInvariantTests.swift */,
-			);
-			path = MeasurementCoreTests;
-			sourceTree = "<group>";
-		};
-		6B0C1EF3302AE6E9002C4FCC /* MothCaptureTests */ = {
-			isa = PBXGroup;
-			children = (
-				6B0C1EF2302AE6E9002C4FCC /* FrameCopierTests.swift */,
-			);
-			path = MothCaptureTests;
-			sourceTree = "<group>";
-		};
-		6B0C1EF4302AE6E9002C4FCC /* Tests */ = {
-			isa = PBXGroup;
-			children = (
-				6B0C1EF1302AE6E9002C4FCC /* MeasurementCoreTests */,
-				6B0C1EF3302AE6E9002C4FCC /* MothCaptureTests */,
-			);
-			path = Tests;
 			sourceTree = "<group>";
 		};
 		6B0C2000302AE6E9002C4FCC /* Moth */ = {
@@ -293,48 +206,6 @@
 			productReference = 6B0C1E98302A33C3002C4FCC /* Moth.app */;
 			productType = "com.apple.product-type.application";
 		};
-		6B0C1EA9302A33C4002C4FCC /* MothTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 6B0C1EC1302A33C4002C4FCC /* Build configuration list for PBXNativeTarget "MothTests" */;
-			buildPhases = (
-				6B0C1EA6302A33C4002C4FCC /* Sources */,
-				6B0C1EA7302A33C4002C4FCC /* Frameworks */,
-				6B0C1EA8302A33C4002C4FCC /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				6B0C1EAC302A33C4002C4FCC /* PBXTargetDependency */,
-			);
-			name = MothTests;
-			packageProductDependencies = (
-				6B3000000000000000000005 /* MeasurementCore */,
-				6B3000000000000000000006 /* MothCapture */,
-			);
-			productName = MothTests;
-			productReference = 6B0C1EAA302A33C4002C4FCC /* MothTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		6B0C1EB3302A33C4002C4FCC /* MothUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 6B0C1EC4302A33C4002C4FCC /* Build configuration list for PBXNativeTarget "MothUITests" */;
-			buildPhases = (
-				6B0C1EB0302A33C4002C4FCC /* Sources */,
-				6B0C1EB1302A33C4002C4FCC /* Frameworks */,
-				6B0C1EB2302A33C4002C4FCC /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				6B0C1EB6302A33C4002C4FCC /* PBXTargetDependency */,
-			);
-			name = MothUITests;
-			packageProductDependencies = (
-			);
-			productName = MothUITests;
-			productReference = 6B0C1EB4302A33C4002C4FCC /* MothUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -347,14 +218,6 @@
 				TargetAttributes = {
 					6B0C1E97302A33C3002C4FCC = {
 						CreatedOnToolsVersion = 26.6;
-					};
-					6B0C1EA9302A33C4002C4FCC = {
-						CreatedOnToolsVersion = 26.6;
-						TestTargetID = 6B0C1E97302A33C3002C4FCC;
-					};
-					6B0C1EB3302A33C4002C4FCC = {
-						CreatedOnToolsVersion = 26.6;
-						TestTargetID = 6B0C1E97302A33C3002C4FCC;
 					};
 				};
 			};
@@ -376,8 +239,6 @@
 			projectRoot = "";
 			targets = (
 				6B0C1E97302A33C3002C4FCC /* Moth */,
-				6B0C1EA9302A33C4002C4FCC /* MothTests */,
-				6B0C1EB3302A33C4002C4FCC /* MothUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -388,20 +249,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				6B0C2002302AE6E9002C4FCC /* Assets.xcassets in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		6B0C1EA8302A33C4002C4FCC /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		6B0C1EB2302A33C4002C4FCC /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -416,38 +263,9 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		6B0C1EA6302A33C4002C4FCC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				6B0C1F45302AE6E9002C4FCC /* TierInvariantTests.swift in Sources */,
-				6B0C1F4E302AE6E9002C4FCC /* IEEE1789Tests.swift in Sources */,
-				6B0C1F4F302AE6E9002C4FCC /* CaptureTests.swift in Sources */,
-				6B0C1F50302AE6E9002C4FCC /* CalibrationTests.swift in Sources */,
-				6B0C1F51302AE6E9002C4FCC /* FrameCopierTests.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		6B0C1EB0302A33C4002C4FCC /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		6B0C1EAC302A33C4002C4FCC /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 6B0C1E97302A33C3002C4FCC /* Moth */;
-			targetProxy = 6B0C1EAB302A33C4002C4FCC /* PBXContainerItemProxy */;
-		};
-		6B0C1EB6302A33C4002C4FCC /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 6B0C1E97302A33C3002C4FCC /* Moth */;
-			targetProxy = 6B0C1EB5302A33C4002C4FCC /* PBXContainerItemProxy */;
-		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -642,86 +460,6 @@
 			};
 			name = Release;
 		};
-		6B0C1EC2302A33C4002C4FCC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = jt.MothTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Moth.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Moth";
-			};
-			name = Debug;
-		};
-		6B0C1EC3302A33C4002C4FCC /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = jt.MothTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Moth.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Moth";
-			};
-			name = Release;
-		};
-		6B0C1EC5302A33C4002C4FCC /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = jt.MothUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = Moth;
-			};
-			name = Debug;
-		};
-		6B0C1EC6302A33C4002C4FCC /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = jt.MothUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_TARGET_NAME = Moth;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -739,24 +477,6 @@
 			buildConfigurations = (
 				6B0C1EBF302A33C4002C4FCC /* Debug */,
 				6B0C1EC0302A33C4002C4FCC /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		6B0C1EC1302A33C4002C4FCC /* Build configuration list for PBXNativeTarget "MothTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				6B0C1EC2302A33C4002C4FCC /* Debug */,
-				6B0C1EC3302A33C4002C4FCC /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		6B0C1EC4302A33C4002C4FCC /* Build configuration list for PBXNativeTarget "MothUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				6B0C1EC5302A33C4002C4FCC /* Debug */,
-				6B0C1EC6302A33C4002C4FCC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -785,16 +505,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 6B3000000000000000000001 /* XCLocalSwiftPackageReference "." */;
 			productName = MothUI;
-		};
-		6B3000000000000000000005 /* MeasurementCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 6B3000000000000000000001 /* XCLocalSwiftPackageReference "." */;
-			productName = MeasurementCore;
-		};
-		6B3000000000000000000006 /* MothCapture */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 6B3000000000000000000001 /* XCLocalSwiftPackageReference "." */;
-			productName = MothCapture;
 		};
 		6B300000000000000000000C /* MothPersistence */ = {
 			isa = XCSwiftPackageProductDependency;

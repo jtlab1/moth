@@ -130,12 +130,13 @@ extension MothSchemaV1 {
 /// Every stage so far is additive with defaults, so lightweight migration suffices.
 public enum MothMigrationPlan: SchemaMigrationPlan {
     public static var schemas: [any VersionedSchema.Type] {
-        [MothSchemaV1.self, MothSchemaV2.self, MothSchemaV3.self]
+        [MothSchemaV1.self, MothSchemaV2.self, MothSchemaV3.self, MothSchemaV4.self]
     }
     public static var stages: [MigrationStage] {
         [
             .lightweight(fromVersion: MothSchemaV1.self, toVersion: MothSchemaV2.self),
-            .lightweight(fromVersion: MothSchemaV2.self, toVersion: MothSchemaV3.self)
+            .lightweight(fromVersion: MothSchemaV2.self, toVersion: MothSchemaV3.self),
+            .lightweight(fromVersion: MothSchemaV3.self, toVersion: MothSchemaV4.self)
         ]
     }
 }

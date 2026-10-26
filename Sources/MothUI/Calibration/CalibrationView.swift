@@ -5,6 +5,7 @@ import SwiftUI
 public struct CalibrationView: View {
     let viewModel: CalibrationViewModel
     let debugModeEnabled: Bool
+    /// Called with a frequency-only calibration too, when the user keeps one.
     let onCalibrated: (DeviceCalibration) -> Void
 
     @Environment(\.mothPalette) private var palette
@@ -44,11 +45,11 @@ public struct CalibrationView: View {
                         case .permissionDenied:
                             permissionDeniedContent
                                 .transition(.mothSwap)
-                        case .previewing, .capturing, .confirming, .solving:
+                        case .previewing, .readout, .solving, .measuringResponse:
                             liveCameraContent
                                 .transition(.mothSwap)
-                        case .succeeded(let calibration):
-                            succeededContent(calibration)
+                        case .succeeded(let outcome):
+                            succeededContent(outcome)
                                 .transition(.mothSwap)
                         case .rejected:
                             rejectedContent
@@ -56,8 +57,14 @@ public struct CalibrationView: View {
                         case .inconsistent:
                             inconsistentContent
                                 .transition(.mothSwap)
-                        case .failed(let message):
-                            problemContent(title: nil, message: message, hint: nil, color: palette.danger)
+                        case .failed(let message, let hint, let detail):
+                            problemContent(
+                                title: nil,
+                                message: message,
+                                hint: hint,
+                                detail: debugModeEnabled ? detail : nil,
+                                color: palette.danger
+                            )
                                 .transition(.mothSwap)
                         }
                     }
@@ -72,6 +79,13 @@ public struct CalibrationView: View {
             .padding(MothTheme.sectionSpacing)
             .animation(MothTheme.Motion.smooth, value: viewModel.phase)
         }
+        .onChange(of: viewModel.phase, initial: true) { _, phase in
+            switch phase {
+            case .measuringResponse: isSolvingResponse = true
+            case .solving: break
+            default: isSolvingResponse = false
+            }
+        }
         .mothScreenBackground()
         .sensoryFeedback(.success, trigger: isSucceededPhase) { _, succeeded in succeeded }
         .sensoryFeedback(.error, trigger: isProblemPhase) { _, problem in problem }
@@ -79,17 +93,22 @@ public struct CalibrationView: View {
 
     // MARK: - Step tracker
 
-    private static let stepTitles = ["Region", "Aim", "Capture", "Done"]
+    private static let stepTitles = ["Region", "Aim", "Capture", "Light", "Done"]
 
     /// Display only; never drives `viewModel.phase`. Failed passes stay on "Capture".
     private var currentStep: Int {
         switch viewModel.phase {
         case .choosingMainsRegion: return 0
         case .requestingPermission, .permissionDenied, .previewing: return 1
-        case .capturing, .solving, .confirming, .rejected, .inconsistent, .failed: return 2
-        case .succeeded: return 3
+        case .readout, .rejected, .inconsistent, .failed: return 2
+        case .solving: return isSolvingResponse ? 3 : 2
+        case .measuringResponse: return 3
+        case .succeeded: return 4
         }
     }
+
+    /// `.solving` follows both readout passes and the sweep; after the sweep it stays on "Light".
+    @State private var isSolvingResponse = false
 
     private var isSucceededPhase: Bool {
         if case .succeeded = viewModel.phase { return true }
@@ -205,7 +224,7 @@ public struct CalibrationView: View {
     }
 
     /// One view across every camera phase so the preview layer keeps one identity (see
-    /// `MeasureView.showsLivePreview`). `.solving` keeps it since the confirming pass follows.
+    /// `MeasureView.showsLivePreview`). `.solving` keeps it since another capture usually follows.
     private var liveCameraContent: some View {
         VStack(spacing: 16) {
             MeasureCameraPreview(session: viewModel.previewSession)
@@ -213,17 +232,20 @@ public struct CalibrationView: View {
                 .overlay { ViewfinderOverlay(isScanning: isScanning) }
                 .clipShape(RoundedRectangle(cornerRadius: MothTheme.controlCornerRadius, style: .continuous))
             switch viewModel.phase {
-            case .capturing(let progress):
-                captureProgressContent(progress: progress, isConfirming: false)
-            case .confirming(let progress):
-                captureProgressContent(progress: progress, isConfirming: true)
+            case .readout(let pass, let progress):
+                readoutProgressContent(pass: pass, progress: progress)
+            case .measuringResponse(let progress):
+                responseProgressContent(progress)
             case .solving:
                 VStack(spacing: 10) {
                     MothWaveform(cycles: 3, speed: 1.2)
                         .frame(height: 40)
-                    Text("Solving…")
+                        .accessibilityHidden(true)
+                    Text(isSolvingResponse ? "Working out how your camera responds to light…" : "Solving…")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(palette.secondaryText)
+                        .multilineTextAlignment(.center)
+                    cancelButton
                 }
                 .transition(.opacity)
             default:
@@ -232,7 +254,7 @@ public struct CalibrationView: View {
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(palette.primaryText)
                         .multilineTextAlignment(.leading)
-                    Text("Moth captures twice and checks the two readings agree, so keep holding still until it's done.")
+                    Text("Moth captures twice and checks the two readings agree, then takes a few short captures to learn how your camera responds to light. Keep holding still until it’s done — about twenty seconds.")
                         .font(.caption)
                         .foregroundStyle(palette.secondaryText)
                         .multilineTextAlignment(.center)
@@ -251,48 +273,176 @@ public struct CalibrationView: View {
 
     private var isScanning: Bool {
         switch viewModel.phase {
-        case .capturing, .confirming: return true
+        case .readout, .measuringResponse: return true
         default: return false
         }
     }
 
+    /// Stops the capture without leaving the screen; the sheet's Close does the same.
+    private var cancelButton: some View {
+        Button("Cancel") { viewModel.cancel() }
+            .font(.body.weight(.semibold))
+            .foregroundStyle(palette.accent)
+            .frame(minHeight: 44)
+            .accessibilityHint(Text("Stops calibrating. Nothing new is saved."))
+    }
+
     @ViewBuilder
-    private func captureProgressContent(progress: CaptureProgress, isConfirming: Bool) -> some View {
+    private func readoutProgressContent(pass: Int, progress: CaptureProgress) -> some View {
+        let passCount = MeasurementRunner.readoutPassCount
         VStack(spacing: 12) {
             if progress.isDim {
                 CaptureQualityWarning(message: "Too dark to calibrate — aim more directly at the reference fixture.")
             }
             MothProgressBar(value: progress.fraction)
             HStack {
-                Text(isConfirming ? "Hold still — confirming…" : "Hold still — calibrating…")
+                Text(pass > 1 ? "Hold still — confirming…" : "Hold still — calibrating…")
                 Spacer()
-                Text(isConfirming ? "Pass 2 of 2" : "Pass 1 of 2")
+                Text("Pass \(pass) of \(passCount)")
                     .foregroundStyle(palette.accent)
             }
             .font(.footnote.weight(.medium))
             .foregroundStyle(palette.secondaryText)
+            .accessibilityElement(children: .combine)
+            cancelButton
         }
         .transition(.opacity)
     }
 
-    private func succeededContent(_ calibration: DeviceCalibration) -> some View {
+    @ViewBuilder
+    private func responseProgressContent(_ progress: ResponseSweepProgress) -> some View {
+        VStack(spacing: 12) {
+            if progress.isDim {
+                CaptureQualityWarning(message: "Too dark to read the light — keep aiming at the same fixture as before.")
+            }
+            MothProgressBar(value: progress.fraction)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Hold still — measuring how your camera responds to light")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Text("Step \(progress.step) of \(progress.stepCount)")
+                    .foregroundStyle(palette.accent)
+                    .monospacedDigit()
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(palette.secondaryText)
+            .accessibilityElement(children: .combine)
+            Text("The picture may get brighter or darker between steps. That’s expected. Resting the phone against something helps.")
+                .font(.caption)
+                .foregroundStyle(palette.secondaryText)
+                .multilineTextAlignment(.center)
+            cancelButton
+        }
+        .transition(.opacity)
+    }
+
+    @ViewBuilder
+    private func succeededContent(_ outcome: CalibrationOutcome) -> some View {
+        if outcome.usesAssumedResponse {
+            assumedResponseContent(outcome)
+        } else if outcome.unlocksDepth {
+            fullySucceededContent(outcome.calibration)
+        } else {
+            frequencyOnlyContent(outcome)
+        }
+    }
+
+    private func fullySucceededContent(_ calibration: DeviceCalibration) -> some View {
         VStack(spacing: 14) {
             CalibrationSuccessMark()
                 .padding(.vertical, 8)
             Text("Calibrated")
                 .font(.moth(.title2))
                 .foregroundStyle(palette.primaryText)
-            Text("Moth is ready to measure on this phone.")
+            Text("Full measurement is unlocked. Moth can measure how fast a light flickers, how deep the flicker is, and compare both with the IEEE 1789 guideline.")
                 .font(.subheadline)
                 .foregroundStyle(palette.secondaryText)
-            if debugModeEnabled {
-                Text(calibration.formattedLineReadoutTime)
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(palette.secondaryText)
-            }
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            debugReadout(calibration)
             Button("Done") { onCalibrated(calibration) }
                 .buttonStyle(.mothPrimary)
                 .padding(.top, 4)
+        }
+    }
+
+    /// Calibrated with the standard light response: everything works, depth slightly less
+    /// precisely; retrying the sweep is offered, never required.
+    private func assumedResponseContent(_ outcome: CalibrationOutcome) -> some View {
+        VStack(spacing: 14) {
+            CalibrationSuccessMark()
+                .padding(.vertical, 8)
+            Text("Calibrated")
+                .font(.moth(.title2))
+                .foregroundStyle(palette.primaryText)
+            Text("Full measurement is unlocked. Moth couldn’t measure how your camera responds to light, so it’s using the standard response instead. Depth readings may be a little less precise.")
+                .font(.subheadline)
+                .foregroundStyle(palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if debugModeEnabled, let reason = outcome.responseCurveFailure {
+                Text("Light response: \(reason)")
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(palette.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+            debugReadout(outcome.calibration)
+            Button("Done") { onCalibrated(outcome.calibration) }
+                .buttonStyle(.mothPrimary)
+                .padding(.top, 4)
+            Button {
+                viewModel.retryResponseSweep()
+            } label: {
+                Label("Try measuring the light response again", systemImage: "arrow.counterclockwise")
+            }
+            .font(.subheadline)
+        }
+    }
+
+    /// The readout passes agreed, so frequency works; only the sweep is retried.
+    private func frequencyOnlyContent(_ outcome: CalibrationOutcome) -> some View {
+        VStack(spacing: 14) {
+            MothIconBadge(systemImage: "waveform.path", size: 64)
+                .padding(.vertical, 8)
+            Text("Calibrated for frequency")
+                .font(.moth(.title2))
+                .foregroundStyle(palette.primaryText)
+                .multilineTextAlignment(.center)
+            Text("Moth can now measure how fast a light flickers. It couldn’t finish learning how your camera responds to light, so flicker depth and the IEEE 1789 verdict aren’t available yet.")
+                .font(.subheadline)
+                .foregroundStyle(palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Trying that step again usually works. Keep aiming at the same steady light and hold still.")
+                .font(.footnote)
+                .foregroundStyle(palette.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if debugModeEnabled, let reason = outcome.responseCurveFailure {
+                Text("Light response: \(reason)")
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(palette.secondaryText)
+                    .multilineTextAlignment(.center)
+            }
+            debugReadout(outcome.calibration)
+            Button {
+                viewModel.retryResponseSweep()
+            } label: {
+                Label("Try the light-response step again", systemImage: "arrow.counterclockwise")
+            }
+            .buttonStyle(.mothPrimary)
+            .padding(.top, 4)
+            Button("Keep frequency-only calibration") { onCalibrated(outcome.calibration) }
+                .buttonStyle(.mothSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private func debugReadout(_ calibration: DeviceCalibration) -> some View {
+        if debugModeEnabled {
+            Text("\(calibration.formattedLineReadoutTime) · \(calibration.format.formattedDimensions)")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(palette.secondaryText)
         }
     }
 
@@ -314,7 +464,7 @@ public struct CalibrationView: View {
         )
     }
 
-    private func problemContent(title: String?, message: String, hint: String?, color: Color) -> some View {
+    private func problemContent(title: String?, message: String, hint: String?, detail: String? = nil, color: Color) -> some View {
         VStack(spacing: 12) {
             MothIconBadge(systemImage: "exclamationmark.triangle.fill", color: color, size: 64)
             if let title {
@@ -333,6 +483,13 @@ public struct CalibrationView: View {
                     .foregroundStyle(palette.secondaryText)
                     .multilineTextAlignment(.center)
             }
+            if let detail {
+                Text(detail)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(palette.secondaryText)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+            }
             Button {
                 viewModel.retry()
             } label: {
@@ -347,9 +504,14 @@ public struct CalibrationView: View {
         MothCard {
             VStack(alignment: .leading, spacing: 10) {
                 MothSectionHeader("Why this is needed")
-                Text("This is the one number that turns image rows into elapsed time. Without it, Moth can tell you whether a light is flickering but not how fast.")
+                Text("Calibration learns two things about this phone’s camera. How fast it reads each line of the picture turns rows into time, so Moth can tell how fast a light flickers. How its brightness readings respond to light lets Moth tell how deep the flicker is.")
                     .font(.footnote)
                     .foregroundStyle(palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Without calibration, Moth can only tell you whether a light is flickering.")
+                    .font(.footnote)
+                    .foregroundStyle(palette.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

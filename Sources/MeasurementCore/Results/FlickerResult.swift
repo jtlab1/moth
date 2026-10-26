@@ -92,7 +92,11 @@ public enum MeasurementConfidence: String, Sendable, Codable, CaseIterable {
 
 /// The initialiser silently drops fields the tier can't support, so no view can leak one.
 /// Silent rather than trapping so analysers can hand over everything and let the tier decide.
-public struct FlickerResult: Sendable, Codable, Hashable {
+public struct FlickerResult: Sendable, Hashable {
+    /// Bumped when the analysis method changes what a result means. Results stored before
+    /// version 2 decode as 1.
+    public static let currentAnalysisVersion = 2
+
     public let frequencyHz: Double?
 
     /// IEEE 1789's `(max - min) / (max + min) × 100`.
@@ -103,9 +107,17 @@ public struct FlickerResult: Sendable, Codable, Hashable {
     public let tier: MeasurementTier
     public let analyzedAt: Date
 
-    /// Not an error; errors throw.
-    public let diagnosticNote: String?
+    /// Not errors; errors throw. Each says which condition cost confidence or a quantity.
+    public let diagnosticNotes: [String]
 
+    /// `nil` for results from before the capture standard.
+    public let conditions: CaptureConditions?
+
+    /// `nil` when unknown (older results); `false` means depth stayed in code units.
+    public let responseCurveApplied: Bool?
+    public let analysisVersion: Int
+
+    /// `diagnosticNote` is kept for older call sites and is prepended to `diagnosticNotes`.
     public init(
         frequencyHz: Double? = nil,
         modulationDepthPercent: Double? = nil,
@@ -114,7 +126,11 @@ public struct FlickerResult: Sendable, Codable, Hashable {
         confidence: MeasurementConfidence,
         tier: MeasurementTier,
         analyzedAt: Date = Date(),
-        diagnosticNote: String? = nil
+        diagnosticNote: String? = nil,
+        diagnosticNotes: [String] = [],
+        conditions: CaptureConditions? = nil,
+        responseCurveApplied: Bool? = nil,
+        analysisVersion: Int = FlickerResult.currentAnalysisVersion
     ) {
         self.frequencyHz = tier.supportsFrequency ? frequencyHz : nil
         self.modulationDepthPercent = tier.supportsModulationDepth ? modulationDepthPercent : nil
@@ -123,7 +139,59 @@ public struct FlickerResult: Sendable, Codable, Hashable {
         self.confidence = confidence
         self.tier = tier
         self.analyzedAt = analyzedAt
-        self.diagnosticNote = diagnosticNote
+        self.diagnosticNotes = (diagnosticNote.map { [$0] } ?? []) + diagnosticNotes
+        self.conditions = conditions
+        self.responseCurveApplied = responseCurveApplied
+        self.analysisVersion = analysisVersion
+    }
+
+    /// The first note, for views that show one line.
+    public var diagnosticNote: String? { diagnosticNotes.first }
+}
+
+// Hand-written so results stored before analysis version 2 (a single `diagnosticNote`, no
+// conditions) still decode; and decoding goes through `init` so the tier gate re-applies.
+extension FlickerResult: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case frequencyHz, modulationDepthPercent, verdict, presence, confidence, tier, analyzedAt
+        case diagnosticNote, diagnosticNotes, conditions, responseCurveApplied, analysisVersion
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let notes = try container.decodeIfPresent([String].self, forKey: .diagnosticNotes)
+        let legacyNote = try container.decodeIfPresent(String.self, forKey: .diagnosticNote)
+        self.init(
+            frequencyHz: try container.decodeIfPresent(Double.self, forKey: .frequencyHz),
+            modulationDepthPercent: try container.decodeIfPresent(Double.self, forKey: .modulationDepthPercent),
+            verdict: try container.decodeIfPresent(IEEE1789Verdict.self, forKey: .verdict),
+            presence: try container.decode(FlickerPresence.self, forKey: .presence),
+            confidence: try container.decode(MeasurementConfidence.self, forKey: .confidence),
+            tier: try container.decode(MeasurementTier.self, forKey: .tier),
+            analyzedAt: try container.decode(Date.self, forKey: .analyzedAt),
+            diagnosticNote: notes == nil ? legacyNote : nil,
+            diagnosticNotes: notes ?? [],
+            conditions: try container.decodeIfPresent(CaptureConditions.self, forKey: .conditions),
+            responseCurveApplied: try container.decodeIfPresent(Bool.self, forKey: .responseCurveApplied),
+            analysisVersion: try container.decodeIfPresent(Int.self, forKey: .analysisVersion) ?? 1
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(frequencyHz, forKey: .frequencyHz)
+        try container.encodeIfPresent(modulationDepthPercent, forKey: .modulationDepthPercent)
+        try container.encodeIfPresent(verdict, forKey: .verdict)
+        try container.encode(presence, forKey: .presence)
+        try container.encode(confidence, forKey: .confidence)
+        try container.encode(tier, forKey: .tier)
+        try container.encode(analyzedAt, forKey: .analyzedAt)
+        // The legacy key too, so an older build reading this store still shows a note.
+        try container.encodeIfPresent(diagnosticNote, forKey: .diagnosticNote)
+        try container.encode(diagnosticNotes, forKey: .diagnosticNotes)
+        try container.encodeIfPresent(conditions, forKey: .conditions)
+        try container.encodeIfPresent(responseCurveApplied, forKey: .responseCurveApplied)
+        try container.encode(analysisVersion, forKey: .analysisVersion)
     }
 }
 

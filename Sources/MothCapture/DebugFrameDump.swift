@@ -7,6 +7,8 @@ import MeasurementCore
 // compiling to nothing in release.
 
 /// Luma plane only, since analysis never reads chroma; `load` fills chroma with neutral grey.
+/// Metadata goes through `CaptureMetadata`'s Codable form whole, so capture conditions and the
+/// response curve the capture was analysed with survive the round trip.
 public enum DebugFrameDump {
     public enum DumpError: Error, LocalizedError {
         case pixelBufferCreationFailed
@@ -71,6 +73,11 @@ public enum DebugFrameDump {
             )
         }
 
+        // The recorded encoding, so video-range black (16) reloads as video range.
+        let pixelFormat = CaptureStandard.acceptedPixelFormats.contains(metadata.pixelFormat)
+            ? metadata.pixelFormat
+            : kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+
         var buffers: [CVPixelBuffer] = []
         buffers.reserveCapacity(metadata.frames.count)
 
@@ -80,7 +87,7 @@ public enum DebugFrameDump {
                 var pixelBuffer: CVPixelBuffer?
                 let status = CVPixelBufferCreate(
                     kCFAllocatorDefault, width, height,
-                    kCVPixelFormatType_420YpCbCr8BiPlanarFullRange, nil, &pixelBuffer
+                    pixelFormat, nil, &pixelBuffer
                 )
                 guard status == kCVReturnSuccess, let buffer = pixelBuffer else {
                     throw DumpError.pixelBufferCreationFailed
