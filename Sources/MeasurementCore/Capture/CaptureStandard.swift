@@ -134,23 +134,58 @@ public enum CaptureStandard {
         return min(max(Float(iso), isoRange.lowerBound), isoRange.upperBound)
     }
 
-    /// `responseSweepFactors` × `meteredISO`, clamped to `isoRange`, ascending, with levels
-    /// that clamping pushes within 5% of each other merged: a repeated ISO adds no information.
-    /// The centre is clamped into the range first, so there are always at least three levels
-    /// unless the range itself spans under a stop.
-    public static func responseSweepISOs(meteredISO: Float, isoRange: ClosedRange<Float>) -> [Float] {
-        let metered = meteredISO.isFinite && meteredISO > 0
-            ? meteredISO
-            : (isoRange.lowerBound * isoRange.upperBound).squareRoot()
-        // Clamped first, so a scene metered past either end still gets steps on one side.
-        let center = min(max(metered, isoRange.lowerBound), isoRange.upperBound)
-        var levels: [Float] = []
-        for factor in responseSweepFactors {
-            let iso = min(max(center * factor, isoRange.lowerBound), isoRange.upperBound)
-            if let last = levels.last, iso <= last * 1.05 { continue }
-            levels.append(iso)
+    /// One response-sweep step's exposure.
+    public struct ResponseSweepExposure: Sendable, Equatable {
+        public let iso: Float
+        public let duration: TimeInterval
+
+        public init(iso: Float, duration: TimeInterval) {
+            self.iso = iso
+            self.duration = duration
         }
-        return levels
+
+        /// What the solver compares between steps: ISO × seconds.
+        public var gain: Double { Double(iso) * duration }
+    }
+
+    /// `responseSweepFactors` × the metered gain, ascending, with levels that clamping pushes
+    /// within 5% of each other merged: a repeated gain adds no information.
+    ///
+    /// `meteredISO` is the ISO the scene wants at the standard exposure, *unclamped*: in bright
+    /// light it sits below the format's minimum. ISO alone can't go below that floor, so a step
+    /// that needs less gain shortens the exposure instead; otherwise a bright scene's sweep
+    /// starts at the minimum ISO already high on the tone curve and only climbs into the
+    /// highlight roll-off, where the curve is too flat to pass for any display encoding. The
+    /// solver uses read-back ISO × exposure, so it doesn't matter which of the two moved.
+    /// Exposure is never lengthened past the standard: a dim scene's steps clamp at the
+    /// maximum ISO as before.
+    public static func responseSweepExposures(
+        meteredISO: Float,
+        isoRange: ClosedRange<Float>,
+        exposureRange: ClosedRange<TimeInterval>
+    ) -> [ResponseSweepExposure] {
+        let standard = exposureDuration(clampedTo: exposureRange)
+        let metered = meteredISO.isFinite && meteredISO > 0
+            ? Double(meteredISO) * standard
+            : Double((isoRange.lowerBound * isoRange.upperBound).squareRoot()) * standard
+        let lowest = Double(isoRange.lowerBound) * exposureRange.lowerBound
+        let highest = Double(isoRange.upperBound) * standard
+        // Clamped first, so a scene metered past either end still gets steps on one side.
+        let center = min(max(metered, lowest), highest)
+        var steps: [ResponseSweepExposure] = []
+        for factor in responseSweepFactors {
+            let gain = min(max(center * Double(factor), lowest), highest)
+            let step: ResponseSweepExposure
+            if gain >= Double(isoRange.lowerBound) * standard {
+                step = ResponseSweepExposure(iso: Float(gain / standard), duration: standard)
+            } else {
+                let duration = min(max(gain / Double(isoRange.lowerBound), exposureRange.lowerBound), standard)
+                step = ResponseSweepExposure(iso: isoRange.lowerBound, duration: duration)
+            }
+            if let last = steps.last, step.gain <= last.gain * 1.05 { continue }
+            steps.append(step)
+        }
+        return steps
     }
 
     public static func isStandardExposure(_ duration: TimeInterval) -> Bool {

@@ -200,9 +200,9 @@ public actor MeasurementRunner {
         )
     }
 
-    /// The ISO sweep: up to `CaptureStandard.responseSweepSteps` settled captures at the
-    /// standard exposure, two stops either side of the metered ISO, solved into a response
-    /// curve.
+    /// The gain sweep: up to `CaptureStandard.responseSweepSteps` settled captures two stops
+    /// either side of the metered gain (`CaptureStandard.responseSweepExposures`), solved
+    /// into a response curve.
     ///
     /// Never fails the calibration over the curve: an unsolvable sweep (or a capture error
     /// during it) returns `readout` with `ResponseCurve.standardSRGB`, the encoding the
@@ -229,20 +229,22 @@ public actor MeasurementRunner {
         format: CaptureFormatSignature,
         onProgress: (@Sendable (ResponseSweepProgress) -> Void)?
     ) async throws -> ResponseCurve {
-        guard let isoRange = await camera.standardISORange() else {
+        guard let limits = await camera.standardExposureLimits() else {
             throw CaptureSetupError.notPrepared
         }
         // Metered once, before the first step: between steps preview AE is still settling
         // from the last one. Read-back ISOs, not these, are what the solver uses.
-        let metered = await camera.meteredStandardISO() ?? (isoRange.lowerBound * isoRange.upperBound).squareRoot()
-        let isos = CaptureStandard.responseSweepISOs(meteredISO: metered, isoRange: isoRange)
+        let metered = await camera.meteredStandardISO() ?? (limits.iso.lowerBound * limits.iso.upperBound).squareRoot()
+        let exposures = CaptureStandard.responseSweepExposures(
+            meteredISO: metered, isoRange: limits.iso, exposureRange: limits.duration
+        )
         var sweep: [FrameSequence] = []
         defer { sweep.forEach { $0.releaseFrames() } }
 
-        for (index, iso) in isos.enumerated() {
+        for (index, planned) in exposures.enumerated() {
             try Task.checkCancellation()
             let step = index + 1
-            let stepCount = isos.count
+            let stepCount = exposures.count
             var stepProgress: (@Sendable (CaptureProgress) -> Void)?
             if let onProgress {
                 stepProgress = { progress in
@@ -253,10 +255,13 @@ public actor MeasurementRunner {
                 duration: CaptureStandard.responseSweepStepDuration,
                 lineReadoutTime: nil,
                 calibration: nil,
-                exposure: .fixedISO(iso),
+                exposure: .fixed(iso: planned.iso, duration: planned.duration),
                 onProgress: stepProgress
             )
             sweep.append(frames)
+            #if DEBUG
+            Self.debugLogSweepStep(frames, step: step, requested: planned)
+            #endif
             // A mid-sweep format change would mix two encodings in one curve.
             guard CaptureFormatSignature(metadata: frames.metadata).matches(format) else {
                 throw AnalysisError.responseCurveUnsolvable(
@@ -264,8 +269,50 @@ public actor MeasurementRunner {
                 )
             }
         }
-        return try await calibrator.solveResponseCurve(from: sweep)
+        let curve = try await calibrator.solveResponseCurve(from: sweep)
+        #if DEBUG
+        Self.debugLogCurve(curve)
+        #endif
+        return curve
     }
+
+    #if DEBUG
+    /// Requested vs read-back ISO and the step's mean luma: brightness should rise with
+    /// read-back ISO × exposure, roughly as gain^(1/2.2).
+    private static func debugLogSweepStep(_ frames: FrameSequence, step: Int, requested: CaptureStandard.ResponseSweepExposure) {
+        let isos = frames.metadata.frames.map(\.iso).sorted()
+        let exposures = frames.metadata.frames.map(\.exposureDuration).sorted()
+        var sum = 0.0
+        var count = 0
+        try? frames.forEachPlane { _, plane, _ in
+            for y in 0..<plane.height {
+                let row = plane.rowBytes(y)
+                for x in 0..<plane.width { sum += Double(row[x]) }
+            }
+            count += plane.width * plane.height
+        }
+        print(String(
+            format: "Moth sweep step %d: requested ISO %.0f at 1/%.0f s, read-back ISO %.0f, exposure 1/%.0f s, %d frames, mean luma %.1f, mode %@",
+            step, requested.iso, 1 / requested.duration, isos.isEmpty ? 0 : isos[isos.count / 2],
+            exposures.isEmpty ? 0 : 1 / exposures[exposures.count / 2],
+            frames.count, count > 0 ? sum / Double(count) : 0,
+            String(describing: frames.metadata.frames.first?.exposureMode)
+        ))
+    }
+    #endif
+
+    #if DEBUG
+    /// The solved curve's local gamma (d ln light / d ln code) at a few codes: sRGB reads
+    /// ≈1.7 at 32, ≈2.0 at 64, ≈2.2–2.3 from 128 up. Much steeper inflates depth.
+    private static func debugLogCurve(_ curve: ResponseCurve) {
+        let local = [32, 64, 128, 192, 240].map { code -> String in
+            let low = Double(curve.values[code - 8]), high = Double(curve.values[code + 8])
+            guard low > 0, high > 0 else { return "\(code): –" }
+            return String(format: "%d: %.2f", code, log(high / low) / log(Double(code + 8) / Double(code - 8)))
+        }
+        print("Moth response curve local gamma — " + local.joined(separator: ", "))
+    }
+    #endif
 
     private static func isCancellation(_ error: Error) -> Bool {
         if error is CancellationError { return true }

@@ -44,27 +44,30 @@ struct ExposurePlan: Sendable, Equatable {
         return ExposurePlan(exposureDuration: exposure, iso: iso, shortfallStops: shortfall)
     }
 
-    /// A response-sweep step: the standard exposure at a set ISO, clamped to the format.
+    /// A response-sweep step: a set ISO and exposure, clamped to the format.
     static func fixed(
         iso: Float,
+        duration: TimeInterval,
         exposureRange: ClosedRange<TimeInterval>,
         isoRange: ClosedRange<Float>
     ) -> ExposurePlan {
         ExposurePlan(
-            exposureDuration: CaptureStandard.exposureDuration(clampedTo: exposureRange),
+            exposureDuration: min(max(duration, exposureRange.lowerBound), exposureRange.upperBound),
             iso: min(max(iso, isoRange.lowerBound), isoRange.upperBound),
             shortfallStops: 0
         )
     }
 }
 
-/// How a capture chooses its ISO. Exposure duration is always the standard.
+/// How a capture chooses its exposure. Always the standard duration with ISO adapting,
+/// except response-sweep steps, which only feed the response solver.
 public enum CaptureExposure: Sendable, Equatable {
     /// From continuous AE at capture start (measurements and readout calibration).
     case metered
 
-    /// A set ISO (response-curve sweep steps).
-    case fixedISO(Float)
+    /// A set ISO and duration (response-curve sweep steps; the duration is shorter than the
+    /// standard only where the scene needs less gain than the minimum ISO gives).
+    case fixed(iso: Float, duration: TimeInterval)
 }
 
 /// Decides, frame by frame, whether a delivered frame belongs to the capture. Frames before

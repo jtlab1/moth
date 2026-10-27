@@ -216,7 +216,15 @@ enum ResponseCurveSolver {
             }
         }
         guard let chosen = candidates.last else {
-            throw unsolvable("the camera's response didn't look like any display encoding")
+            // The fitted gamma says what went wrong: far above the range means codes barely
+            // moved with ISO (the gain wasn't applied, or was undone downstream); near 1 means
+            // the gain came after the tone curve.
+            let gamma = robustFit(groups: groups, order: 1)?.coefficients[0] ?? .nan
+            throw unsolvable(String(
+                format: "the camera's response didn't look like any display encoding (gamma %.2f, expected %.1f–%.1f, from %d readings at codes %.0f%%–%.0f%%)",
+                gamma, plausibleGamma.lowerBound, plausibleGamma.upperBound,
+                observationCount, lowest * 100, highest * 100
+            ))
         }
         return try makeSolution(
             chosen.fit,

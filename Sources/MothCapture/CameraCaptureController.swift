@@ -304,21 +304,25 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
         }
     }
 
-    /// The standard format's ISO range, which the response sweep spans. `nil` before `prepare()`.
-    public func standardISORange() async -> ClosedRange<Float>? {
-        await withCheckedContinuation { (continuation: CheckedContinuation<ClosedRange<Float>?, Never>) in
+    /// The standard format's ISO and exposure ranges, which the response sweep spans. `nil`
+    /// before `prepare()`.
+    public func standardExposureLimits() async -> (iso: ClosedRange<Float>, duration: ClosedRange<TimeInterval>)? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<(iso: ClosedRange<Float>, duration: ClosedRange<TimeInterval>)?, Never>) in
             sessionQueue.async {
-                guard self.isConfigured, let format = self.standardFormat ?? self.device?.activeFormat else {
+                guard self.isConfigured, self.device != nil else {
                     continuation.resume(returning: nil)
                     return
                 }
-                continuation.resume(returning: format.minISOValue...max(format.minISOValue, format.maxISOValue))
+                let capability = self.capabilityLocked(calibration: nil)
+                continuation.resume(returning: (capability.isoRange, capability.exposureDurationRange))
             }
         }
     }
 
-    /// The ISO a `.metered` capture would use right now: preview AE's reading converted to
-    /// the standard exposure. The response sweep centres on it so every step sees the scene.
+    /// The ISO the scene wants right now at the standard exposure: preview AE's reading
+    /// converted as a `.metered` capture would, but *not* clamped to the format, so the
+    /// response sweep can tell a scene brighter than the minimum ISO allows and step below it
+    /// with shorter exposures.
     public func meteredStandardISO() async -> Float? {
         await withCheckedContinuation { (continuation: CheckedContinuation<Float?, Never>) in
             sessionQueue.async {
@@ -327,8 +331,15 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
                     return
                 }
                 let capability = self.capabilityLocked(calibration: nil)
-                let plan = Self.exposurePlan(for: .metered, device: device, capability: capability)
-                continuation.resume(returning: plan.iso)
+                let exposure = CaptureStandard.exposureDuration(clampedTo: capability.exposureDurationRange)
+                let autoISO = Double(device.currentISO)
+                let autoDuration = device.currentExposureSeconds
+                guard autoISO > 0, autoDuration > 0, exposure > 0 else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let iso = autoISO * autoDuration / exposure * pow(2, CaptureStandard.meteringBiasEV)
+                continuation.resume(returning: iso.isFinite ? Float(iso) : nil)
             }
         }
     }
@@ -496,9 +507,10 @@ public final class CameraCaptureController: NSObject, @unchecked Sendable {
                 exposureRange: capability.exposureDurationRange,
                 isoRange: capability.isoRange
             )
-        case .fixedISO(let iso):
+        case let .fixed(iso, duration):
             return ExposurePlan.fixed(
                 iso: iso,
+                duration: duration,
                 exposureRange: capability.exposureDurationRange,
                 isoRange: capability.isoRange
             )
