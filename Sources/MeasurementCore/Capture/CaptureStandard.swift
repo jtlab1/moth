@@ -1,15 +1,13 @@
 import CoreVideo
 import Foundation
 
-/// The one set of capture conditions every phone measures under, so depth, presence and
-/// confidence mean the same thing on every device. Capture, calibration and analysis all read
-/// these; none of them should hard-code a copy.
+/// The one set of capture conditions every phone uses, so results mean the same thing everywhere.
+/// Capture, calibration and analysis all read these; don't hard-code copies.
 public enum CaptureStandard {
 
     // MARK: - Frame timing
 
-    /// 100, 120, 200 and 240 Hz are not integer multiples of 29, so mains-family flicker drifts
-    /// in phase frame to frame; flat-field normalisation depends on that drift.
+    /// Mains flicker (100 to 240 Hz) isn't a multiple of 29, so its phase drifts between frames, which the flat field relies on.
     public static let frameRate: Double = 29.0
 
     /// Measured median fps further than this from `frameRate` flags the capture as off-standard.
@@ -20,8 +18,7 @@ public enum CaptureStandard {
 
     // MARK: - Exposure
 
-    /// 250 µs on every phone and every measurement: the exposure box filter then attenuates a
-    /// given flicker frequency identically everywhere. ISO alone adapts to the scene.
+    /// 250 µs everywhere so the exposure dims a given flicker the same on every phone. Only ISO adapts to the scene.
     public static let exposureDuration: TimeInterval = 1.0 / 4000.0
 
     /// Read-back exposure within this fraction of the standard counts as on-standard.
@@ -36,7 +33,7 @@ public enum CaptureStandard {
     /// Seconds of valid, settled frames per measurement.
     public static let captureDuration: TimeInterval = 4.0
 
-    /// Deliberate, consistent defocus: blurs scene detail, which per-row means don't need.
+    /// Deliberate defocus to blur scene detail, which per-row means don't need.
     public static let focusLensPosition: Float = 0.0
 
     public static let whiteBalanceTemperature: Float = 5000
@@ -59,9 +56,8 @@ public enum CaptureStandard {
 
     // MARK: - Response curve sweep
 
-    /// Sweep ISOs as multiples of the metered ISO: two stops either side of the scene's own
-    /// level, so every step shows the scene neither black nor clipped, on any phone in any
-    /// room. Spanning the whole ISO range instead left most steps unusable at 1/4000 s.
+    /// Sweep ISOs as multiples of the metered ISO, two stops either side, so no step goes black or clips.
+    /// Spanning the full ISO range left most steps unusable at 1/4000 s.
     public static let responseSweepFactors: [Float] = [0.25, 0.5, 1, 2, 4]
 
     /// Steps in a full sweep (fewer if clamping to the ISO range merges some).
@@ -81,7 +77,7 @@ public enum CaptureStandard {
     /// Below this estimated depth a flicker is not reported as present, on any phone.
     public static let presenceDepthFloorPercent: Double = 1.0
 
-    /// Below this depth, or `absentSignificanceSigma`, the light is reported as not flickering.
+    /// Below this depth, or `absentSignificanceSigma`, the light reads as not flickering.
     public static let absentDepthCeilingPercent: Double = 0.5
     public static let presentSignificanceSigma: Double = 4
     public static let absentSignificanceSigma: Double = 2
@@ -95,7 +91,7 @@ public enum CaptureStandard {
     public static let phaseFoldBins: Int = 64
     public static let minimumPhaseFoldBinCoverage: Double = 0.9
 
-    /// Harmonics attenuated below this by the exposure box filter are not corrected, only dropped.
+    /// Harmonics dimmed below this by the exposure get dropped instead of corrected.
     public static let minimumExposureSincGain: Double = 0.3
     public static let harmonicSignificanceSigma: Double = 3
 
@@ -120,8 +116,7 @@ public enum CaptureStandard {
         min(max(exposureDuration, range.lowerBound), range.upperBound)
     }
 
-    /// Converts AE's metered (duration, ISO) to the ISO that gives the same brightness at
-    /// `exposure`, minus `meteringBiasEV` stops of headroom, clamped to the format.
+    /// Converts AE's metered duration and ISO to the matching ISO at `exposure`, minus some headroom, clamped to the format.
     public static func meteredISO(
         autoExposureISO: Float,
         autoExposureDuration: TimeInterval,
@@ -148,17 +143,8 @@ public enum CaptureStandard {
         public var gain: Double { Double(iso) * duration }
     }
 
-    /// `responseSweepFactors` × the metered gain, ascending, with levels that clamping pushes
-    /// within 5% of each other merged: a repeated gain adds no information.
-    ///
-    /// `meteredISO` is the ISO the scene wants at the standard exposure, *unclamped*: in bright
-    /// light it sits below the format's minimum. ISO alone can't go below that floor, so a step
-    /// that needs less gain shortens the exposure instead; otherwise a bright scene's sweep
-    /// starts at the minimum ISO already high on the tone curve and only climbs into the
-    /// highlight roll-off, where the curve is too flat to pass for any display encoding. The
-    /// solver uses read-back ISO × exposure, so it doesn't matter which of the two moved.
-    /// Exposure is never lengthened past the standard: a dim scene's steps clamp at the
-    /// maximum ISO as before.
+    /// Sweep gains ascending, merging any that clamp to within 5% of each other.
+    /// In bright scenes steps below the min ISO shorten the exposure instead, but never lengthen it past the standard.
     public static func responseSweepExposures(
         meteredISO: Float,
         isoRange: ClosedRange<Float>,
@@ -170,7 +156,7 @@ public enum CaptureStandard {
             : Double((isoRange.lowerBound * isoRange.upperBound).squareRoot()) * standard
         let lowest = Double(isoRange.lowerBound) * exposureRange.lowerBound
         let highest = Double(isoRange.upperBound) * standard
-        // Clamped first, so a scene metered past either end still gets steps on one side.
+        // Clamp first so a scene metered past either end still gets steps on one side.
         let center = min(max(metered, lowest), highest)
         var steps: [ResponseSweepExposure] = []
         for factor in responseSweepFactors {

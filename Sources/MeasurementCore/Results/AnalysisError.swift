@@ -12,20 +12,16 @@ public enum AnalysisError: Error, Sendable, Equatable {
     case ambiguousFrequency(candidates: [Double])
     case implausibleCalibration(solved: TimeInterval, plausible: ClosedRange<TimeInterval>)
 
-    /// Calibration only: the reference light showed no flicker at the mains rate. Usually an
-    /// LED, which is a finding about the light, not a lack of light. `reason` is for the log.
+    /// Calibration only: the reference light didn't flicker at the mains rate, usually because it's an LED. `reason` is for the log.
     case referenceFlickerNotFound(reason: String)
 
-    /// Calibration only: the camera ran at a rate in step with the reference (30 fps under
-    /// 120 Hz), so the light's phase never drifts between frames and can't be timed.
+    /// Calibration only: the camera ran in step with the light (30 fps under 120 Hz), so its phase never drifts.
     case frameRateLockedToLight(frameRate: Double, lightHz: Double)
 
-    /// Calibration only: the sensor reads the buffer's last row first, which the analysis
-    /// doesn't support. Refused rather than solved, because it can mimic a wrong readout time.
+    /// Calibration only: the sensor reads the last row first, which we refuse since it can mimic a wrong readout time.
     case readoutDirectionReversed
 
-    /// The ISO sweep couldn't yield a trustworthy response curve. Not fatal to calibration:
-    /// frequency still works, depth stays off. `reason` is for the log, not the user.
+    /// The ISO sweep couldn't produce a trustworthy curve. Not fatal: frequency still works, depth stays off.
     case responseCurveUnsolvable(reason: String)
     case unsupportedPixelFormat(UInt32)
     case pixelBufferUnreadable(frameIndex: Int, code: Int)
@@ -49,7 +45,7 @@ extension AnalysisError {
             return "The light was too bright for the camera to measure accurately."
         case .ambiguousFrequency(let candidates):
             let list = candidates.map { "\(Int($0.rounded())) Hz" }.joined(separator: " or ")
-            return "This light could be flickering at \(list) — one capture can't tell them apart."
+            return "This light could be flickering at \(list), and one capture can't tell them apart."
         case .implausibleCalibration:
             return "Calibration produced a result that can't be right, so it wasn't saved."
         case .referenceFlickerNotFound:

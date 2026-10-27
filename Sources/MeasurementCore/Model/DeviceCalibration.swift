@@ -46,20 +46,17 @@ public struct DeviceCalibration: Sendable, Codable, Hashable, Identifiable {
 }
 
 extension DeviceCalibration {
-    /// 2 is the capture standard (fixed 29 fps, 1/4000 s, format-keyed). Everything persisted
-    /// before it is version 1 and never used.
+    /// 2 is the capture standard (29 fps, 1/4000 s, keyed by format). Version 1 is never used.
     public static let currentVersion = 2
 
-    /// 1–100 µs, a format-agnostic outer bound. Prefer `plausibleLineReadoutRange(for:)`,
-    /// which is far tighter; this remains for callers that don't know the format.
+    /// 1 to 100 µs, a loose bound for callers that don't know the format. Prefer `plausibleLineReadoutRange(for:)`.
     public static let plausibleLineReadoutRange: ClosedRange<TimeInterval> = 1e-6...1e-4
 
     public static func isPlausible(_ lineReadoutTime: TimeInterval) -> Bool {
         plausibleLineReadoutRange.contains(lineReadoutTime)
     }
 
-    /// Reading out every buffer row can't take longer than a frame period, so a readout time
-    /// above `(1 / fps) / height` (plus 2% for timing slack) can only be a harmonic lock-on.
+    /// Reading every row can't take longer than a frame, so anything above that (plus 2% slack) is a harmonic lock-on.
     public static func plausibleLineReadoutRange(for format: CaptureFormatSignature) -> ClosedRange<TimeInterval> {
         let lower = plausibleLineReadoutRange.lowerBound
         guard format.frameRate > 0, format.height > 0 else { return lower...lower }
@@ -80,8 +77,7 @@ extension DeviceCalibration {
         return relativeDifference <= agreementTolerance
     }
 
-    /// Same hardware, current method, same capture format. Any one failing means the
-    /// readout time (or curve) describes a different capture than the one being analysed.
+    /// Same hardware, current method, same format; if any differ, the calibration describes a different capture.
     public func appliesTo(modelIdentifier: String, format: CaptureFormatSignature) -> Bool {
         deviceModelIdentifier == modelIdentifier
             && isCurrentVersion
@@ -104,8 +100,7 @@ public enum CalibrationState: Sendable, Equatable {
     /// Solved on different hardware (a restored backup); not applied.
     case foreignDevice(DeviceCalibration)
 
-    /// This device, but an older method or a different capture format; not applied. The user
-    /// is asked to recalibrate once.
+    /// This device, but an older method or different format, so it's not applied and the user recalibrates once.
     case outdated(DeviceCalibration)
     case rejected(solved: TimeInterval, attemptedAt: Date)
 

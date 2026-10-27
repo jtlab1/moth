@@ -2,11 +2,9 @@ import CoreVideo
 import Foundation
 import MeasurementCore
 
-/// Flicker lives in the rows; columns only average noise. Keeping whole frames (~1.5 GB for
-/// 4 s at 120 fps) or AVFoundation's own buffers would exhaust memory or starve its pool.
+/// Flicker lives in the rows, so columns only average noise. Keeping whole frames would blow through memory.
 public enum FrameRetentionPolicy: Sendable, Equatable {
-        /// The default: ~210 KB per 1080p frame instead of ~3 MB. Costs noise (≈4× per row), not
-        /// bias; use `.fullFrame` for very dim or shallow modulation.
+        /// The default: ~210 KB per 1080p frame instead of ~3 MB. Costs some noise, not bias; use `.fullFrame` for very dim light.
     case columnStrip(width: Int)
     case fullFrame
 
@@ -16,8 +14,7 @@ public enum FrameRetentionPolicy: Sendable, Equatable {
     public static let `default` = FrameRetentionPolicy.columnStrip(width: 128)
 }
 
-/// The pool is built lazily from the first real frame, because the configured format can
-/// differ and a wrong pool yields silently wrong strides.
+/// Pool is built lazily from the first real frame, since a wrong guess at the format gives silently wrong strides.
 final class FrameCopier {
     let policy: FrameRetentionPolicy
 
@@ -123,8 +120,7 @@ final class FrameCopier {
 
     // MARK: - Copy
 
-    /// Row by row because strides differ; a whole-plane memcpy would shear the image into a
-    /// convincing, entirely artificial periodic signal.
+    /// Row by row because strides differ; a single memcpy would shear the image into fake periodic signal.
     private func copy(
         from source: CVPixelBuffer,
         to destination: CVPixelBuffer,

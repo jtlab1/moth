@@ -47,8 +47,7 @@ struct AssignBuildingSheet: View {
         }
     }
 
-    /// One view with an explicit `.contentShape` and an overlay divider, so the whole row,
-    /// `Spacer` included, is one tap target the divider can't steal.
+    /// Explicit `.contentShape` plus an overlay divider so the whole row, spacer included, is one tap target.
     private func existingBuildingRow(_ building: Building) -> some View {
         Button {
             onAssign(building.id)

@@ -16,28 +16,22 @@ public struct RowBrightnessCapture: Sendable {
     public let frames: [RowBrightnessFrame]
     public let lineReadoutTime: TimeInterval?
 
-    /// True when every pixel went through a `ResponseCurve` before row averaging. False means
-    /// rows are black-subtracted codes: fine for frequency, not for depth.
+    /// True if every pixel went through a `ResponseCurve` before averaging.
+    /// False means rows are black-subtracted codes, fine for frequency but not depth.
     public let isLinear: Bool
 
     /// Code subtracted from rows when not linear; the raw code of nominal black either way.
     public let blackPointCode: Float
 
-    /// Per row: temporal mean of the raw row-mean code. Flat-field normalisation reads this to
-    /// find crushed rows in the camera's own units, whatever the linearisation.
+    /// Each row's mean raw code over time, so the flat field can spot crushed rows in camera units.
     public let rowMeanCodes: [Float]
 
-    /// Per row: more than `CaptureStandard.saturatedRowPixelFraction` of its pixels were at or
-    /// above the format's saturation code (`LumaCodeLevels`: 250 full range, 230 video range)
-    /// in at least one frame. A row mean that includes
-    /// clipped pixels understates the light, so such rows are excluded, not corrected.
+    /// Rows where too many pixels hit the saturation code in any frame.
+    /// Clipped pixels make the mean read low, so these rows get excluded, not corrected.
     public let rowSaturated: [Bool]
 
-    /// Per row: in the frames where it was at least as bright as its own mean, more than
-    /// `RowBrightnessExtractor.blackClippedPixelFraction` of its pixels sat at the capture's
-    /// black floor. Noise clipped at black lifts such a row's mean and flattens its flicker
-    /// (the dark end's counterpart of `rowSaturated`), so these rows are excluded too. Only the
-    /// brighter frames count, so a deep flicker's off phase doesn't exclude its row.
+    /// Rows where too many pixels sat at black during their brighter frames.
+    /// Clipped noise flattens the flicker, so these get excluded too (dark-end version of `rowSaturated`).
     public let rowBlackClipped: [Bool]
 
     /// Row means at or above 250/255; high values mean amplitude would read falsely low.
@@ -59,10 +53,8 @@ public enum RowBrightnessExtractor {
         try extract(from: frames, response: frames.metadata.responseCurve)
     }
 
-    /// With `response`, each pixel goes through the inverse LUT *before* the row is averaged:
-    /// the mean of codes is not the code of the mean once the tone curve bends. Without one,
-    /// rows stay in black-subtracted code units and the capture is flagged non-linear.
-    /// - Throws: `unsupportedPixelFormat` for anything but 8-bit biplanar 4:2:0.
+    /// With `response`, pixels get linearized before averaging, since the mean of codes isn't the code of the mean.
+    /// Without it rows stay in black-subtracted codes. Throws for anything but 8-bit 4:2:0.
     public static func extract(from frames: FrameSequence, response: ResponseCurve?) throws -> RowBrightnessCapture {
         var rowFrames: [RowBrightnessFrame] = []
         rowFrames.reserveCapacity(frames.count)
@@ -86,8 +78,7 @@ public enum RowBrightnessExtractor {
         }
         let table = response?.values ?? []
 
-        // The clip floor: nominal black, or a pedestal above it if the first frame bottoms out
-        // a few codes higher. Pixels at or below it are clipped noise, not measurements.
+        // The clip floor: nominal black, or a slightly higher pedestal if the first frame bottoms out there.
         var floorCode = Float(0)
         if !frames.isEmpty {
             floorCode = try frames.withPlane(at: 0) { plane in
@@ -132,8 +123,7 @@ public enum RowBrightnessExtractor {
             var low: Float = floorCode + 0.5
             var blackCounts = [Int32](repeating: 0, count: plane.height)
             var rowCodes = [Float](repeating: 0, count: plane.height)
-            // Video range clips at 235, so its threshold sits as far below 235 as full range's
-            // does below 255 (the levels the calibrator and response solver use).
+            // Video range clips at 235, so its threshold sits the same distance below 235 as full range's does below 255.
             var high = Float(LumaCodeLevels(pixelFormat: plane.pixelFormat).saturation) - 0.5
 
             var rowMeans = [Float](repeating: 0, count: plane.height)
@@ -213,11 +203,10 @@ public enum RowBrightnessExtractor {
         )
     }
 
-    /// The same 5% as saturation at the top: at 5% of pixels clipped, the clip lifts a row's mean by ~1% of its level.
+    /// Same 5% as saturation; at that point clipping lifts a row's mean by about 1%.
     public static let blackClippedPixelFraction: Double = 0.05
 
-    /// A frame whose darkest pixel sits at most this far above nominal black is taken to be
-    /// clipping at a pedestal there.
+    /// If a frame's darkest pixel is this close to black, treat it as clipping at a pedestal.
     static let maximumPedestalCodes: Float = 8
 
     static func nominalBlackPointCode(for pixelFormat: UInt32) -> Float {

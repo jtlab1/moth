@@ -3,12 +3,9 @@ import CoreVideo
 import Foundation
 import MeasurementCore
 
-// DEBUG-only: the privacy promise ("captures are never saved") depends on this file
-// compiling to nothing in release.
+// DEBUG-only. The "captures are never saved" promise depends on this compiling to nothing in release.
 
-/// Luma plane only, since analysis never reads chroma; `load` fills chroma with neutral grey.
-/// Metadata goes through `CaptureMetadata`'s Codable form whole, so capture conditions and the
-/// response curve the capture was analysed with survive the round trip.
+/// Saves the luma plane only (`load` fills chroma with gray), plus the full `CaptureMetadata` so conditions and curve survive.
 public enum DebugFrameDump {
     public enum DumpError: Error, LocalizedError {
         case pixelBufferCreationFailed

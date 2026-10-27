@@ -1,20 +1,12 @@
 import Accelerate
 import Foundation
 
-/// A capture divided, row by row, by that row's own temporal mean (spec C2).
-///
-/// At the standard 29 fps, mains-family flicker drifts in phase from frame to frame, so a
-/// row's mean over the capture is the scene's brightness at that row with the flicker averaged
-/// out. Dividing by it leaves `r = 1 + flicker` in every usable row whatever the lamp shape,
-/// vignetting, aim, ISO or (with a response curve) tone curve. Frequency and depth both work on
-/// `r`, which is what makes them comparable across phones.
-///
-/// Shared by `RealFlickerAnalyzer` and `RealDeviceCalibrator`; module-internal on purpose.
+/// Each row divided by its own mean over time, leaving `r = 1 + flicker` whatever the scene, aim or ISO.
+/// Shared by `RealFlickerAnalyzer` and `RealDeviceCalibrator`; internal on purpose.
 struct FlatFieldCapture: Sendable {
     let rowCount: Int
 
-    /// One per frame, each `rowCount` long: `r(row, frame) = v / M(row)`. Excluded rows hold
-    /// exactly 1, so `r - 1` is 0 there and contributes nothing to any sum or spectrum.
+    /// Per frame, `r = v / M(row)`. Excluded rows are exactly 1 so they add nothing to any sum.
     let ratios: [[Float]]
 
     /// `M(row)` in the capture's units (linear or code); 0 for excluded rows.
@@ -36,8 +28,7 @@ struct FlatFieldCapture: Sendable {
     var frameCount: Int { ratios.count }
     var usableFraction: Double { rowCount > 0 ? Double(usableRowCount) / Double(rowCount) : 0 }
 
-    /// The same capture with each row's ratio divided by `factors[row]`, i.e. with M(row)
-    /// multiplied by it. For refining M once a model of the flicker exists.
+    /// Same capture with each row's ratio divided by `factors[row]`, for refining M once there's a flicker model.
     func rescalingRows(by factors: [Float]) -> FlatFieldCapture {
         precondition(factors.count == rowCount)
         let inverse = factors.map { $0 > 0 ? 1 / $0 : 1 }
@@ -77,15 +68,11 @@ struct FlatFieldCapture: Sendable {
 
 enum FlatField {
 
-    /// A row whose temporal mean raw code is within this many codes of nominal black carries
-    /// mostly quantisation and read noise; its ratio would be noise divided by noise.
+    /// Rows this close to black are mostly read noise, so their ratio would just be noise over noise.
     static let crushedCodeMargin: Float = 4
 
-    /// - Parameter frameGains: per-frame relative gain (ISO × exposure over its median), divided
-    ///   out before the row means. Only meaningful for linear captures; pass `nil` otherwise.
-    /// - Throws: `sensorSaturated` or `insufficientSignal` when fewer than
-    ///   `CaptureStandard.minimumUsableRowFraction` of rows are usable, whichever exclusion
-    ///   dominates.
+    /// - Parameter frameGains: per-frame relative gain to divide out first; only for linear captures.
+    /// - Throws: `sensorSaturated` or `insufficientSignal` when too few rows are usable.
     static func normalise(_ capture: RowBrightnessCapture, frameGains: [Double]? = nil) throws -> FlatFieldCapture {
         let rowCount = capture.rowCount
         let frames = capture.frames
@@ -172,9 +159,7 @@ enum FlatField {
         )
     }
 
-    /// Per-frame least-squares line over the usable rows of a deviation (`r - 1`), with the
-    /// row index as abscissa. Build once per capture; `detrend` and `trend` are then a few vDSP
-    /// calls per frame.
+    /// Per-frame least-squares line over usable rows of `r - 1`. Build once per capture, then each call is cheap.
     struct Detrender: Sendable {
         let mask: [Float]
         /// Row coordinate scaled to −1...1 across the buffer, so slopes are "change across the frame".
@@ -202,8 +187,7 @@ enum FlatField {
             determinant = weights * sxx - sx * sx
         }
 
-        /// `deviation` must already be 0 on excluded rows (as `FlatFieldCapture.deviations()` is).
-        /// `offset` is the fitted value at mid-frame, `slope` the change from mid to last row.
+        /// `deviation` must already be 0 on excluded rows. `offset` is the value at mid-frame, `slope` mid to last row.
         func trend(_ deviation: [Float]) -> (offset: Double, slope: Double) {
             guard sumWeights > 1, determinant > 0 else { return (0, 0) }
             var sy: Float = 0
@@ -215,8 +199,7 @@ enum FlatField {
             return (intercept, slope)
         }
 
-        /// Removes each frame's own line, for detection only: a per-frame offset or tilt
-        /// (hand motion, ISO wobble) would otherwise leak into every low bin. Excluded rows stay 0.
+        /// Removes each frame's own line for detection, so hand motion or ISO wobble doesn't leak into low bins.
         func detrend(_ deviation: [Float]) -> [Float] {
             let (offset, slope) = trend(deviation)
             var line = [Float](repeating: 0, count: deviation.count)

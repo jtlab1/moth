@@ -2,8 +2,7 @@ import AVFoundation
 import Foundation
 import MeasurementCore
 
-/// Becomes a `RoomMeasurement` only once a room is picked, so a discarded reading never
-/// touches storage.
+/// Only becomes a `RoomMeasurement` once a room is picked, so discarded readings never hit storage.
 public struct MeasurementDraft: Sendable {
     public let flicker: FlickerResult
     public let capturedAt: Date
@@ -36,8 +35,7 @@ public struct MeasurementDraft: Sendable {
     /// How the capture was taken; persisted with the measurement via `flicker`.
     public var conditions: CaptureConditions? { flicker.conditions }
 
-    /// Both are parameters because the rating doesn't exist yet when the draft is made, and
-    /// this layer doesn't know `UserSettings`.
+    /// Both are parameters since the rating doesn't exist yet and this layer doesn't know `UserSettings`.
     public func measurement(roomID: UUID, comfortRating: Int? = nil, mainsRegion: MainsRegion? = nil) -> RoomMeasurement {
         RoomMeasurement(
             roomID: roomID,
@@ -86,8 +84,7 @@ public actor MeasurementRunner {
         await camera.stopPreview()
     }
 
-    /// What a calibration must match to apply to the next capture; `nil` before `prepare()`.
-    /// Lets the UI ask the store for the format-aware calibration state.
+    /// What a calibration has to match for the next capture, so the UI can ask the store for the right state. `nil` before `prepare()`.
     public func activeFormatSignature() async -> CaptureFormatSignature? {
         await camera.activeFormatSignature()
     }
@@ -141,28 +138,20 @@ public actor MeasurementRunner {
     }
 
     #if DEBUG
-    /// Debug-only, one-shot. `nonisolated(unsafe)` because it's set from the main actor
-    /// right before one `measure` call, and the camera refuses concurrent captures.
+    /// Debug-only, one-shot. `nonisolated(unsafe)` is fine since it's set right before one `measure` call
+    /// and the camera refuses concurrent captures.
     public nonisolated(unsafe) static var debugPendingDumpName: String?
     #endif
 
     // MARK: - Calibration
-    //
-    // Driven in three steps so the UI can show each: readout pass 1, readout pass 2 (which must
-    // agree with pass 1, `DeviceCalibration.agree`), then one response sweep:
-    //
-    //     let first = try await runner.calibrateReadout(referenceFrequencyHz: hz, duration: d)
-    //     let second = try await runner.calibrateReadout(referenceFrequencyHz: hz, duration: d)
-    //     guard DeviceCalibration.agree(first.lineReadoutTime, second.lineReadoutTime) else { … }
-    //     let outcome = try await runner.measureResponseCurve(for: second) { sweepProgress in … }
+    // Runs in three steps so the UI can show each: two readout passes that must agree
+    // (`DeviceCalibration.agree`), then one response sweep.
 
     /// Readout passes the UI runs before the sweep.
     public static let readoutPassCount = 2
 
-    /// One readout pass: a metered standard capture of the reference light, solved for line
-    /// readout time. The result has no response curve; pass it to `measureResponseCurve(for:)`.
-    /// Validates again after the calibrator on purpose: a wrong readout time is worth
-    /// refusing twice.
+    /// One readout pass that solves line readout time from the reference light, with no response curve yet.
+    /// Validates again after the calibrator on purpose, since a wrong readout time is worth refusing twice.
     public func calibrateReadout(
         referenceFrequencyHz: Double,
         duration: TimeInterval = CaptureStandard.captureDuration,
@@ -182,8 +171,7 @@ public actor MeasurementRunner {
             knownFrequencyHz: referenceFrequencyHz
         )
 
-        // What the capture actually ran as (recorded in its conditions), so a fresh calibration
-        // applies to the next capture from the same format.
+        // Record what the capture actually ran as so the new calibration applies to the next capture.
         let format = CaptureFormatSignature(metadata: frames.metadata)
         let plausible = DeviceCalibration.plausibleLineReadoutRange(for: format)
         guard plausible.contains(solved) else {
@@ -200,14 +188,8 @@ public actor MeasurementRunner {
         )
     }
 
-    /// The gain sweep: up to `CaptureStandard.responseSweepSteps` settled captures two stops
-    /// either side of the metered gain (`CaptureStandard.responseSweepExposures`), solved
-    /// into a response curve.
-    ///
-    /// Never fails the calibration over the curve: an unsolvable sweep (or a capture error
-    /// during it) returns `readout` with `ResponseCurve.standardSRGB`, the encoding the
-    /// camera is forced into, and the reason in `responseCurveFailure`. Depth then still
-    /// works, flagged as using the assumed curve. Only cancellation throws.
+    /// Runs the ISO sweep around the metered gain and solves it into a response curve.
+    /// Never fails calibration: a bad sweep falls back to `standardSRGB` with a reason. Only cancellation throws.
     public func measureResponseCurve(
         for readout: DeviceCalibration,
         onProgress: (@Sendable (ResponseSweepProgress) -> Void)? = nil
@@ -232,8 +214,7 @@ public actor MeasurementRunner {
         guard let limits = await camera.standardExposureLimits() else {
             throw CaptureSetupError.notPrepared
         }
-        // Metered once, before the first step: between steps preview AE is still settling
-        // from the last one. Read-back ISOs, not these, are what the solver uses.
+        // Meter once up front since AE is still settling between steps. The solver uses read-back ISOs anyway.
         let metered = await camera.meteredStandardISO() ?? (limits.iso.lowerBound * limits.iso.upperBound).squareRoot()
         let exposures = CaptureStandard.responseSweepExposures(
             meteredISO: metered, isoRange: limits.iso, exposureRange: limits.duration
@@ -277,8 +258,7 @@ public actor MeasurementRunner {
     }
 
     #if DEBUG
-    /// Requested vs read-back ISO and the step's mean luma: brightness should rise with
-    /// read-back ISO × exposure, roughly as gain^(1/2.2).
+    /// Requested vs read-back ISO and mean luma per step; brightness should rise roughly as gain^(1/2.2).
     private static func debugLogSweepStep(_ frames: FrameSequence, step: Int, requested: CaptureStandard.ResponseSweepExposure) {
         let isos = frames.metadata.frames.map(\.iso).sorted()
         let exposures = frames.metadata.frames.map(\.exposureDuration).sorted()
@@ -302,15 +282,15 @@ public actor MeasurementRunner {
     #endif
 
     #if DEBUG
-    /// The solved curve's local gamma (d ln light / d ln code) at a few codes: sRGB reads
-    /// ≈1.7 at 32, ≈2.0 at 64, ≈2.2–2.3 from 128 up. Much steeper inflates depth.
+    /// The curve's local gamma at a few codes. sRGB is ≈1.7 at 32, ≈2.0 at 64, ≈2.2 from 128 up.
+    /// Much steeper inflates depth.
     private static func debugLogCurve(_ curve: ResponseCurve) {
         let local = [32, 64, 128, 192, 240].map { code -> String in
             let low = Double(curve.values[code - 8]), high = Double(curve.values[code + 8])
             guard low > 0, high > 0 else { return "\(code): –" }
             return String(format: "%d: %.2f", code, log(high / low) / log(Double(code + 8) / Double(code - 8)))
         }
-        print("Moth response curve local gamma — " + local.joined(separator: ", "))
+        print("Moth response curve local gamma: " + local.joined(separator: ", "))
     }
     #endif
 
@@ -326,8 +306,7 @@ public actor MeasurementRunner {
     }
 }
 
-/// Progress through the response sweep: step `step` of `stepCount` (1-based), and that
-/// step's own capture progress.
+/// Response sweep progress: which step we're on (1-based) and that step's own progress.
 public struct ResponseSweepProgress: Sendable, Equatable {
     public let step: Int
     public let stepCount: Int
@@ -349,8 +328,8 @@ public struct ResponseSweepProgress: Sendable, Equatable {
     public var isDim: Bool { capture.isDim }
 }
 
-/// A finished calibration and, if the response curve couldn't be solved, why. The calibration
-/// is valid either way; without a curve only frequency (Tier 2) is unlocked.
+/// A finished calibration and why the curve failed, if it did.
+/// It's valid either way; without a curve you only get frequency (Tier 2).
 public struct CalibrationOutcome: Sendable, Equatable {
     public let calibration: DeviceCalibration
     public let responseCurveFailure: String?

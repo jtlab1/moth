@@ -1,7 +1,6 @@
 import Foundation
 
-/// Split at IEEE 1789's 90 Hz boundary because the harms differ: below it overlaps
-/// seizure-trigger ranges, above it is headache and eye strain from PWM dimming.
+/// Split at 90 Hz since the harms differ: seizure risk below, headaches and eye strain from PWM above.
 public enum GuidanceFinding: String, Sendable, Hashable, CaseIterable, Identifiable {
     case exceedsLowRiskLimitBelow90Hz
 
@@ -42,9 +41,9 @@ public enum Guidance {
             finding: .exceedsLowRiskLimitBelow90Hz,
             title: "This fixture flickers slower than 90 Hz, and more than IEEE 1789 recommends",
             actions: [
-                "Ask about swapping this fixture for LED or incandescent lighting, or adding a filter to existing fluorescent tubes — both reduce flicker at the source.",
-                "Ask about blocking this fixture instead — a cubicle wall, an office with a door, or a shade over the desk — or ask to turn off the overhead light and use task lighting.",
-                "This flicker speed falls in the 3–30 Hz range general photosensitive-epilepsy guidance treats as a seizure risk, with 16–25 Hz flagged as most likely to trigger — worth mentioning if anyone using the room has that history."
+                "Ask about swapping this fixture for LED or incandescent lighting, or adding a filter to existing fluorescent tubes. Both reduce flicker at the source.",
+                "Ask about blocking this fixture instead (a cubicle wall, an office with a door, or a shade over the desk), or ask to turn off the overhead light and use task lighting.",
+                "This flicker speed falls in the 3–30 Hz range general photosensitive-epilepsy guidance treats as a seizure risk, with 16–25 Hz flagged as most likely to trigger. Worth mentioning if anyone using the room has that history."
             ],
             sources: [
                 GuidanceSource(
@@ -61,7 +60,7 @@ public enum Guidance {
             finding: .exceedsLowRiskLimit90To1250Hz,
             title: "This fixture flickers between 90 Hz and 1250 Hz, and more than IEEE 1789 recommends",
             actions: [
-                "Ask facilities whether the driver on this fixture can run at a higher PWM frequency, or switch to non-PWM (constant-current) dimming instead — both cut flicker without changing brightness.",
+                "Ask facilities whether the driver on this fixture can run at a higher PWM frequency, or switch to non-PWM (constant-current) dimming instead. Both cut flicker without changing brightness.",
                 "Ask about a filter over this fixture, or bringing in a personal lamp so it can be turned off, especially if headaches or eye strain follow time spent under it.",
                 "If daylight reaches the room, ask to sit near a window instead of under this fixture."
             ],
@@ -85,7 +84,7 @@ public enum Guidance {
             title: "Flicker was detected, but this device can't grade how severe it is",
             actions: [
                 "Calibrate this iPhone once, using an older fluorescent or incandescent fixture, to unlock frequency measurement.",
-                "Even calibrated, some iPhones can measure frequency but not modulation depth — that's a hardware limit, not a setup problem."
+                "Even calibrated, some iPhones can measure frequency but not modulation depth. That's a hardware limit, not a setup problem."
             ],
             sources: [
                 GuidanceSource(name: "Moth's own tier system", url: nil)
@@ -93,7 +92,7 @@ public enum Guidance {
         )
     ]
 
-    /// Tier-safe because `verdict` is `nil` below Tier 1, so Tier 2 can only reach `.detectedNotGraded`.
+    /// Tier-safe since `verdict` is `nil` below Tier 1, so Tier 2 can only reach `.detectedNotGraded`.
     public static func findings(for flicker: FlickerResult) -> [GuidanceFinding] {
         switch flicker.severity {
         case .exceedsLowRisk:

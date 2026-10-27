@@ -9,12 +9,10 @@ public struct MeasureView: View {
     /// Set when measuring from inside a known room, so the name can't be retyped onto another room.
     let presetRoomName: String?
 
-    /// `viewModel` is shared with a sheet and `TabView` keeps hidden tabs alive, so without this
-    /// a second preview layer blocked the main thread ~9 s and blacked out the visible one.
+    /// Hidden tabs stay alive and `viewModel` is shared, so without this a second preview layer froze the UI for ~9 s.
     let showsLivePreview: Bool
 
-    /// Set when this phone's calibration is outdated: a banner offers recalibrating, but
-    /// measuring stays available (presence only) in the meantime.
+    /// Set when the calibration is outdated: shows a recalibrate banner but still allows measuring (presence only).
     let onRecalibrate: (() -> Void)?
 
     @Environment(\.mothPalette) private var palette
@@ -176,15 +174,14 @@ public struct MeasureView: View {
             .transition(.mothSwap)
     }
 
-    /// One view across `.previewing` and `.capturing` so the preview layer keeps one identity;
-    /// separate copies briefly attached a second layer during the transition.
+    /// One view across `.previewing` and `.capturing` so the preview layer keeps its identity during the transition.
     private var liveCameraContent: some View {
         VStack(spacing: 16) {
             cameraPreview
             if case .capturing(let progress) = viewModel.phase {
                 VStack(alignment: .leading, spacing: 12) {
                     if progress.isDim {
-                        CaptureQualityWarning(message: "Too dark to measure — move closer to the light or aim more directly at it.")
+                        CaptureQualityWarning(message: "Too dark to measure. Move closer to the light or aim more directly at it.")
                     }
                     HStack(alignment: .firstTextBaseline) {
                         Text("Hold still")

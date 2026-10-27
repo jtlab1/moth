@@ -1,8 +1,7 @@
 import MeasurementCore
 import SwiftUI
 
-/// One screen, not a pager: it fits, there's no hidden page to wonder about, and nothing
-/// slides sideways.
+/// One screen instead of a pager: it fits, nothing's hidden, and nothing slides sideways.
 public struct OnboardingView: View {
     let onFinished: () -> Void
 

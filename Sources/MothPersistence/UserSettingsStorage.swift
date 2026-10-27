@@ -1,8 +1,7 @@
 import Foundation
 import MeasurementCore
 
-/// In `UserDefaults`, not `MothStore`: per-device preferences must survive `wipeAll` and be
-/// readable before the store opens.
+/// Lives in `UserDefaults` instead of `MothStore` so it survives `wipeAll` and is readable before the store opens.
 public struct UserSettingsStorage {
     private let defaults: UserDefaults
     private let key: String

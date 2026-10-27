@@ -1,7 +1,7 @@
 import CoreVideo
 import Foundation
 
-/// The analyzer run in reverse: the frequency is known, the readout time isn't.
+/// Basically the analyzer in reverse: we know the frequency and solve for readout time.
 public struct RealDeviceCalibrator: DeviceCalibrating {
     public init() {}
 
@@ -14,7 +14,7 @@ public struct RealDeviceCalibrator: DeviceCalibrating {
             throw AnalysisError.insufficientSignal(reason: "non-positive reference frequency")
         }
 
-        // The signature `MeasurementRunner` validates against, so both agree on what's plausible.
+        // Same signature `MeasurementRunner` validates against, so both agree on what's plausible.
         let format = frames.metadata.conditions?.formatSignature ?? CaptureFormatSignature(metadata: frames.metadata)
         let plausible = DeviceCalibration.plausibleLineReadoutRange(for: format)
 
@@ -30,7 +30,7 @@ public struct RealDeviceCalibrator: DeviceCalibrating {
         return solution.lineReadoutTime
     }
 
-    /// Debevec–Malik over the ISO sweep; see `ResponseCurveSolver`.
+    /// Fits the camera response from the ISO sweep; see `ResponseCurveSolver`.
     public func solveResponseCurve(from sweep: [FrameSequence]) async throws -> ResponseCurve {
         try Task.checkCancellation()
         return try ResponseCurveSolver.solve(sweep: sweep).curve
@@ -43,12 +43,11 @@ public struct RealDeviceCalibrator: DeviceCalibrating {
 struct ReadoutSolution: Sendable {
     let lineReadoutTime: TimeInterval
 
-    /// Peak power over the noise power expected at the same readout time, measured from this
-    /// capture's own fit residuals (hand sway included). About 1 for no flicker at all.
+    /// Peak power over the noise expected at that readout time, from this capture's own residuals.
+    /// About 1 means no flicker at all.
     let significance: Double
 
-    /// What `significance` had to reach: pure noise clears it once in
-    /// `1 / falseAlarmProbability` captures, given how many readout times were searched.
+    /// Threshold `significance` had to clear; pure noise passes once in `1 / falseAlarmProbability` captures.
     let significanceThreshold: Double
 
     /// The `k` of the sub-multiple the harmonic guard moved to, if it fired.
@@ -56,50 +55,37 @@ struct ReadoutSolution: Sendable {
     let usableRowFraction: Double
 }
 
-/// Searches line readout time `L` directly. Each row of each frame samples the light at
-/// `t_f + y·L`; for a candidate `L` the model is one waveform at the known frequency (and its
-/// 2nd and 3rd harmonics) seen through every frame at once, so the frames' real timestamps
-/// do the work. Coherent across frames, it needs no full cycle within a frame and can't lock
-/// onto a harmonic: a 2F component drifts at twice the per-frame phase rate of F, so it
-/// doesn't add up under F's demodulation, whatever `L` is tried.
-///
-/// Deviation from the spec's incoherent first stage: per-frame power can't resolve a
-/// pattern spanning under ~2 cycles and is what invites harmonic lock-on, so the grid is
-/// searched coherently from the start. It's cheap: each block is fitted across frames once, and
-/// each candidate `L` then costs one pass over ~128 row blocks.
+/// Searches line readout time `L` directly by fitting one waveform across all frames using their real timestamps.
+/// Fitting coherently across frames avoids needing a full cycle per frame and can't lock onto a harmonic.
 enum ReadoutSolver {
 
-    /// The fundamental plus the harmonics a magnetic ballast adds; all of them carry `L`.
+    /// The fundamental plus the harmonics a magnetic ballast adds.
     static let harmonicCount = 3
 
-    /// Rows are averaged into this many blocks: the highest pattern searched is ~13 cycles per
-    /// frame, so ~128 blocks lose nothing and cut the work ~8×.
+    /// Rows get averaged into this many blocks; the pattern tops out around 13 cycles per frame, so nothing's lost.
     static let targetBlockCount = 128
 
-    /// Columns sampled per row; the row mean of a defocused scene needs no more.
+    /// Columns sampled per row; a defocused scene doesn't need more.
     static let maximumSampledColumns = 256
 
     static let minimumFrameCount = 8
 
-    /// Searching past the plausible ceiling means an out-of-range readout is found and refused,
-    /// rather than clipped to the boundary and accepted.
+    /// Searching past the plausible ceiling means an out-of-range readout gets refused instead of clipped and accepted.
     static let searchCeilingFactor = 2.0
 
     /// Grid steps per main-lobe width of the highest harmonic.
     static let gridOversampling = 6.0
 
-    /// A row is unusable if its temporal mean is within this many codes of black.
+    /// A row is unusable if its mean is within this many codes of black.
     static let minimumRowSignalCodes: Float = 4
 
-    /// Chance that a capture with no flicker at all passes the significance test.
+    /// Chance a capture with no flicker at all passes the significance test.
     static let falseAlarmProbability = 1e-3
 
-    /// Residual noise is also measured at temporal frequencies this close (Hz) to each
-    /// harmonic's alias, so noise concentrated there (hand tremor) isn't averaged away.
+    /// Also measure noise this close (Hz) to each harmonic's alias, so hand tremor there isn't averaged away.
     static let localNoiseOffsetsHz: [Double] = [-3, -2.5, -2, -1.5, 1.5, 2, 2.5, 3]
 
-    /// Offsets closer than this (Hz, after aliasing) to a fitted term see a residual the fit
-    /// has already zeroed, which would understate the noise.
+    /// Offsets closer than this to a fitted term would understate the noise, since the fit already zeroed them.
     static let localNoiseClearanceHz = 1.0
 
     static func solve(
@@ -110,9 +96,8 @@ enum ReadoutSolver {
         guard frames.count >= minimumFrameCount else {
             throw AnalysisError.tooFewFrames(captured: frames.count, required: minimumFrameCount)
         }
-        // The whole method rests on the light's phase drifting from frame to frame; a camera
-        // running in step with it (30 fps under 120 Hz) shows the same pattern every frame,
-        // which the flat field then removes. Refuse that plainly instead of as "no signal".
+        // This all depends on the light's phase drifting between frames. If the camera runs in step with it,
+        // every frame looks the same and the flat field wipes it out, so say that clearly instead of "no signal".
         let frameRate = estimatedFrameRate(frames.metadata)
         let drift = phaseDriftCycles(frequencyHz: frequencyHz, frameRate: frameRate, frameCount: frames.count)
         guard drift >= minimumPhaseDriftCycles else {
@@ -124,8 +109,7 @@ enum ReadoutSolver {
 
         let search = Search(data: data, frequencyHz: frequencyHz, frameRate: frameRate)
 
-        // Stage 1: coherent power on a uniform grid. The lobe width in L is fixed by rows
-        // and frequency, so a uniform grid (not a log one) samples every lobe equally.
+        // Stage 1: coherent power on a uniform grid, since every lobe in L has the same width.
         let lower = plausible.lowerBound * 0.5
         let upper = max(plausible.upperBound * searchCeilingFactor, lower * 4)
         let lobe = search.lobeWidth(harmonic: 1)
@@ -146,10 +130,8 @@ enum ReadoutSolver {
             throw AnalysisError.referenceFlickerNotFound(reason: "reference capture had no structure at the known frequency")
         }
 
-        // Readout direction: a negative L is the sensor reading the buffer's last row first.
-        // The analyzer assumes row 0 first, and a reversed pattern can line up with a wrong
-        // positive L well enough to pass every other check, so a stronger mirrored peak is
-        // refused rather than solved.
+        // Negative L means the sensor reads the last row first. The analyzer assumes row 0 first,
+        // so a stronger mirrored peak gets refused rather than risk matching a wrong positive L.
         var reversed = (L: -lower, power: 0.0)
         for index in 0..<gridCount {
             if index % 64 == 0 { try Task.checkCancellation() }
@@ -161,16 +143,13 @@ enum ReadoutSolver {
         // Stage 2: coherent refine between the neighbouring grid points.
         var best = search.refine(around: grid[bestIndex].L, halfWidth: gridStep, floor: lower)
 
-        // Significance against this capture's own noise at the solved readout time, not
-        // against other readout times or off-frequency probes: picking the best of thousands
-        // of candidates always looks impressive, and probes near hand-sway frequencies
-        // don't. Searching both directions doubles the trials the threshold allows for.
+        // Judge significance against this capture's own noise at the solved L, not against other candidates.
+        // Searching both directions doubles the trial count the threshold accounts for.
         let trials = 2 * max(1, (upper - lower) / search.lobeWidth(harmonic: harmonicCount))
         let threshold = significanceThreshold(trials: trials, harmonics: harmonicCount)
         let significance = best.power / search.noisePower(at: best.L)
 
-        // The mirrored peak must pass the same test a real one does, or noise alone (a
-        // steady light) would read as a reversed sensor.
+        // The mirrored peak has to pass the same test, or a steady light would read as a reversed sensor.
         if reversed.power > best.power, reversed.power / search.noisePower(at: reversed.L) >= threshold {
             throw AnalysisError.readoutDirectionReversed
         }
@@ -182,9 +161,8 @@ enum ReadoutSolver {
             )
         }
 
-        // Harmonic guard: a sub-multiple L*/k with comparable power means L* may be a
-        // harmonic lock-on; take the smallest such. Only sub-multiples resolvable from L*
-        // are tested, or the peak's own lobe would always trip it.
+        // Harmonic guard: if L*/k has comparable power, L* may be a harmonic lock-on, so take the smallest one.
+        // Only test sub-multiples far enough from L* to resolve, or the peak's own lobe would trip it.
         var guardDivisor: Int?
         let peakPower = best.power
         for k in (2...4).reversed() {
@@ -207,13 +185,11 @@ enum ReadoutSolver {
         )
     }
 
-    /// Below two cycles of drift across the capture, the fit across frames can't separate the
-    /// flicker from the scene and the slow-drift terms it fits alongside.
+    /// Below two cycles of drift, the cross-frame fit can't separate flicker from the scene and slow drift.
     static let minimumPhaseDriftCycles = 2.0
 
-    /// Noise-only significance is power summed over `harmonics` complex amplitudes, each
-    /// exponentially distributed, over its mean: Gamma(K, 1/K). The threshold `x` solves
-    /// trials · P(Gamma(K) > K·x) = falseAlarmProbability.
+    /// Significance threshold for noise alone, from a Gamma(K, 1/K) distribution,
+    /// set so pure noise passes at `falseAlarmProbability` given the number of trials.
     static func significanceThreshold(trials: Double, harmonics: Int) -> Double {
         let target = falseAlarmProbability / max(1, trials)
         func survival(_ y: Double) -> Double {
@@ -234,8 +210,7 @@ enum ReadoutSolver {
         return high / Double(max(1, harmonics))
     }
 
-    /// How many cycles the reference's phase drifts, frame to frame, over the whole capture:
-    /// the distance of F/fps from the nearest whole number, times the frame count.
+    /// How many cycles the light's phase drifts across the capture, relative to the frames.
     static func phaseDriftCycles(frequencyHz: Double, frameRate: Double, frameCount: Int) -> Double {
         guard frameRate > 0, frequencyHz > 0 else { return 0 }
         let cyclesPerFrame = frequencyHz / frameRate
@@ -243,7 +218,7 @@ enum ReadoutSolver {
         return offset * Double(frameCount)
     }
 
-    /// 1 / median presentation-time delta; the nominal rate if timestamps are unusable.
+    /// 1 / median frame delta, or the nominal rate if timestamps are unusable.
     static func estimatedFrameRate(_ metadata: CaptureMetadata) -> Double {
         let frames = metadata.frames
         guard frames.count >= 2 else { return metadata.nominalFrameRate }
@@ -258,11 +233,8 @@ enum ReadoutSolver {
 
     // MARK: Coherent search
 
-    /// Each row block's complex amplitude at every harmonic of the known frequency, fitted
-    /// across all frames (`fitSinusoids`). The frames drift through the flicker's phase,
-    /// so this needs nothing from within a frame, and the result's phase is
-    /// k·2πF·L·y_j + const whatever the block's brightness or tone-curve slope (which only
-    /// scale its magnitude). Searching L is then fitting that phase slope.
+    /// Each row block's complex amplitude at every harmonic, fitted across all frames.
+    /// The phase slope across blocks depends only on L, so searching L means fitting that slope.
     struct Search {
         let frequencyHz: Double
         private let rows: [Double]
@@ -270,15 +242,14 @@ enum ReadoutSolver {
         private let rowSpan: Double
         /// [harmonic][block]
         private let signal: [[Complex]]
-        /// What the fit left, frame-major: noise, hand sway, anything not the light.
+        /// Whatever the fit didn't explain: noise, hand sway, anything that isn't the light.
         private let residuals: [Double]
         private let times: [Double]
         private let frameCount: Int
-        /// Per harmonic, Σ_f |hat_f|² for its complex amplitude: how residual noise on each
-        /// frame propagates into that amplitude.
+        /// Per harmonic, how much residual noise on each frame leaks into its amplitude.
         private let coefficientVariance: [Double]
         private let degreesOfFreedom: Double
-        /// Per harmonic, the temporal offsets (Hz) local noise is measured at.
+        /// Per harmonic, the offsets (Hz) where local noise gets measured.
         private let localOffsets: [[Double]]
 
         init(data: RatioBlocks, frequencyHz: Double, frameRate: Double) {
@@ -308,16 +279,11 @@ enum ReadoutSolver {
             var parameterCount: Int
         }
 
-        /// Trend columns: slow drift (hand sway, a lamp warming up) is fitted out rather than
-        /// left in the residual, where it would inflate the noise the flicker is judged against.
+        /// Trend columns that fit out slow drift (hand sway, a lamp warming up) so it doesn't inflate the noise.
         static let trendTerms = 2
 
-        /// Per block, least squares over frames of
-        /// r = c₀ + c₁τ + c₂τ² + Σ_m (a_m cos 2πf_m t + b_m sin 2πf_m t), τ the centred,
-        /// scaled time. Fitting jointly, rather than correlating with each phasor, removes
-        /// the leakage between harmonics and from each one's mirror image that a few seconds of
-        /// unevenly drifting phase leaves: at under a cycle per frame that leakage would bend
-        /// the phase slope by several percent.
+        /// Per block, a joint least-squares fit of a slow trend plus every harmonic over frames.
+        /// Fitting jointly avoids leakage between harmonics that would bend the phase slope by several percent.
         static func fitSinusoids(data: RatioBlocks, frequencies: [Double]) -> Fit {
             let base = 1 + trendTerms
             let p = base + 2 * frequencies.count
@@ -351,8 +317,7 @@ enum ReadoutSolver {
                     for k in 0..<p { gram[i * p + k] += design[f * p + i] * design[f * p + k] }
                 }
             }
-            // A whisker of ridge keeps a degenerate timing (phases not drifting) solvable;
-            // the fit is then simply weak, never wrong.
+            // A tiny bit of ridge keeps the fit solvable when phases don't drift; it'll just be weak, not wrong.
             for i in 0..<p { gram[i * p + i] += 1e-9 * Double(n) }
             guard let inverse = invert(gram, size: p) else { return zero }
             // hat = G⁻¹ Xᵀ, p × n.
@@ -423,14 +388,12 @@ enum ReadoutSolver {
             return inverse
         }
 
-        /// Width in L of the coherent peak's main lobe for harmonic `k`: one extra cycle
-        /// across the usable rows.
+        /// Width in L of harmonic k's main lobe: one extra cycle across the usable rows.
         func lobeWidth(harmonic k: Int) -> Double {
             1 / (Double(k) * frequencyHz * max(rowSpan, 1))
         }
 
-        /// Σ_k |Σ_j w_j c_jk e^{-ik·2πF·L·y_j}|²: all blocks' phases lined up by L. A negative
-        /// L is a sensor reading the last row first.
+        /// Total power with all blocks' phases lined up for this L. Negative L means the last row is read first.
         func evaluate(_ L: Double) -> Double {
             var power = 0.0
             for k in 0..<harmonicCount {
@@ -445,11 +408,8 @@ enum ReadoutSolver {
             return power
         }
 
-        /// The power `evaluate(L)` would show from noise alone. The residuals are combined
-        /// across blocks exactly as the signal is at this L, so noise shared between blocks
-        /// (the whole scene swaying) counts at its true strength. Per harmonic, the larger of
-        /// the average residual power and the residual power near that harmonic's alias
-        /// frequency, so tremor concentrated at one frequency isn't averaged away.
+        /// Power `evaluate(L)` would show from noise alone, combining residuals across blocks the same way as the signal.
+        /// Per harmonic, takes the larger of average and near-alias noise so concentrated tremor still counts.
         func noisePower(at L: Double) -> Double {
             let blockCount = rows.count
             var total = 0.0
@@ -461,7 +421,7 @@ enum ReadoutSolver {
                     let phase = omega * rows[j]
                     rotation[j] = Complex(weights[j] * cos(phase), -weights[j] * sin(phase))
                 }
-                // Z_f: this frame's residual, combined across blocks the way the signal is.
+                // This frame's residual, combined across blocks the same way as the signal.
                 var combined = [Complex](repeating: Complex(0, 0), count: frameCount)
                 var whitePower = 0.0
                 for f in 0..<frameCount {
@@ -474,8 +434,7 @@ enum ReadoutSolver {
                     whitePower += z.magnitudeSquared
                 }
                 let white = whitePower / degreesOfFreedom
-                // Local: |Σ_f Z_f e^{-i2π(kF+δ)t_f}|² / n estimates the same per-frame power,
-                // but at temporal frequencies next to this harmonic's.
+                // Local estimate of the same per-frame power, but at frequencies right next to this harmonic.
                 var local: [Double] = []
                 for offset in localOffsets[k] {
                     let hz = Double(k + 1) * frequencyHz + offset
@@ -493,7 +452,7 @@ enum ReadoutSolver {
             return total
         }
 
-        /// Golden-section maximum within ±`halfWidth`; the peak is smooth at this scale.
+        /// Golden-section search for the max within ±`halfWidth`; the peak is smooth at this scale.
         func refine(around center: Double, halfWidth: Double, floor: Double) -> (L: Double, power: Double) {
             var a = max(floor, center - halfWidth)
             var b = center + halfWidth
@@ -519,8 +478,7 @@ enum ReadoutSolver {
             return midPower >= centerPower ? (mid, midPower) : (center, centerPower)
         }
 
-        /// Temporal offsets (Hz) from `hz` whose aliases stay `localNoiseClearanceHz` clear of
-        /// every fitted term: each harmonic (both signs) and the slow-drift terms near 0 Hz.
+        /// Offsets (Hz) from `hz` whose aliases stay clear of every fitted term, harmonics and slow drift included.
         static func localNoiseOffsets(around hz: Double, fitted: [Double], frameRate: Double) -> [Double] {
             guard frameRate > 0 else { return [] }
             func aliasDistance(_ value: Double) -> Double {
@@ -541,11 +499,8 @@ enum ReadoutSolver {
 
     // MARK: Data
 
-    /// Flat-field-normalised, row-block-averaged samples.
-    ///
-    /// Each row is divided by its own temporal mean, which removes the scene (lamp blob,
-    /// vignetting, aim) without touching low spatial frequencies the way skipping bins would;
-    /// the 29 fps phase drift is what makes the temporal mean flicker-free.
+    /// Flat-field-normalized, row-block-averaged samples.
+    /// Dividing each row by its mean removes the scene, and phase drift keeps that mean flicker-free.
     struct RatioBlocks {
         let frameCount: Int
         let blockCount: Int
@@ -553,9 +508,8 @@ enum ReadoutSolver {
         let rows: [Double]
         /// Usable rows per block.
         let weights: [Double]
-        /// r − 1 per block, frame-major. Not detrended: per-frame offsets and slopes (hand
-        /// shake, exposure wobble) aren't periodic at F, so demodulation already rejects them,
-        /// while detrending would strip most of a pattern spanning under one cycle.
+        /// r − 1 per block, frame-major. Not detrended, since demodulation already rejects hand shake
+        /// and detrending would strip a pattern that spans under one cycle.
         let ratios: [Double]
         /// Seconds since the first frame.
         let times: [Double]
@@ -600,7 +554,7 @@ enum ReadoutSolver {
             }
             guard height > 0 else { throw AnalysisError.tooFewFrames(captured: 0, required: minimumFrameCount) }
 
-            // Flat field and row exclusion (spec C2's rules, applied here privately).
+            // Flat field and row exclusion, same rules as spec C2.
             let black = Float(levels.black)
             var usable = [Bool](repeating: false, count: height)
             var flat = [Float](repeating: 0, count: height)
@@ -676,9 +630,8 @@ enum ReadoutSolver {
     }
 }
 
-/// Black and saturation codes for an 8-bit luma plane. Video range puts black at 16 and
-/// white at 235, so its saturation threshold sits as far below 235 as the full-range one
-/// sits below 255.
+/// Black and saturation codes for an 8-bit luma plane.
+/// Video range (16 to 235) gets a saturation threshold the same distance below white as full range.
 struct LumaCodeLevels: Sendable, Equatable {
     let black: Int
     let white: Int

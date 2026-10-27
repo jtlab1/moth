@@ -3,8 +3,7 @@ import Foundation
 extension FlickerResult {
     public static let maxConfidenceLevel = 5
 
-    /// Presentation only: "Tier 3" tested as jargon. Tier dominates, but a clean Tier 2
-    /// deliberately ties a shaky Tier 1.
+    /// Display only, since "Tier 3" tested as jargon. A clean Tier 2 deliberately ties a shaky Tier 1.
     public var confidenceLevel: Int {
         switch (tier, confidence) {
         case (.tier3, .low), (.tier3, .medium): return 1

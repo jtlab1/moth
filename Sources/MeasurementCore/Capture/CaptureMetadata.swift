@@ -11,8 +11,7 @@ public struct FrameDimensions: Sendable, Codable, Hashable {
     }
 }
 
-/// The capture layer only crops perpendicular to readout, so line *n* of a buffer is
-/// always line *n* of the sensor frame.
+/// The capture layer only crops perpendicular to readout, so buffer line n is always sensor line n.
 public struct CaptureRegion: Sendable, Codable, Hashable {
     public let sourceDimensions: FrameDimensions
     public let originX: Int
@@ -79,8 +78,7 @@ public struct CaptureMetadata: Sendable, Codable, Hashable {
     /// `nil` when uncalibrated, which forces Tier 3.
     public let lineReadoutTime: TimeInterval?
 
-    /// From the applicable calibration; `nil` means rows stay in code units and depth is
-    /// unavailable.
+    /// From the matching calibration; `nil` means rows stay in code units and there's no depth.
     public let responseCurve: ResponseCurve?
     public let deviceCapability: DeviceCapabilityProfile
 

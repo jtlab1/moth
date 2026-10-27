@@ -20,11 +20,10 @@ public final class CalibrationViewModel {
         /// The ISO sweep that measures how the camera responds to light.
         case measuringResponse(ResponseSweepProgress)
 
-        /// Always a usable calibration; `responseCurveFailure` says the light response had to
-        /// be assumed rather than measured.
+        /// Always usable; `responseCurveFailure` says if the light response had to be assumed.
         case succeeded(CalibrationOutcome)
         case rejected(solved: TimeInterval, plausible: ClosedRange<TimeInterval>)
-        /// Two plausible solves disagreed, unlike `.rejected`, where one was implausible.
+        /// Two plausible solves disagreed (vs `.rejected`, where one was implausible).
         case inconsistent(first: TimeInterval, second: TimeInterval)
         /// `detail` is the technical reason, shown only in debug mode.
         case failed(message: String, hint: String?, detail: String?)
@@ -44,17 +43,14 @@ public final class CalibrationViewModel {
     private let runner: MeasurementRunner
     private let captureDuration: TimeInterval
 
-    /// Bumped by `cancel()`; work captured before a cancel writes nothing, so a late progress
-    /// callback can't drag the screen back into a capture the user stopped.
+    /// Bumped by `cancel()` so late progress callbacks can't pull the screen back into a stopped capture.
     private var generation = 0
     private var workTask: Task<Void, Never>?
 
-    /// Set while `retryResponseSweep()` runs, so cancelling it doesn't throw away a calibration
-    /// that already works for frequency.
+    /// Set during `retryResponseSweep()` so cancelling doesn't throw away a calibration that already works for frequency.
     private var sweepRetryFallback: CalibrationOutcome?
 
-    /// Started in `init` so camera setup, which doesn't depend on the mains region, finishes
-    /// while the user reads the picker instead of freezing after the tap.
+    /// Kicked off in `init` so camera setup finishes while the user reads the picker instead of freezing after the tap.
     private var prepareTask: Task<Void, Error>?
 
     public init(runner: MeasurementRunner, initialMainsRegion: MainsRegion?, captureDuration: TimeInterval = 4) {
@@ -107,14 +103,13 @@ public final class CalibrationViewModel {
         phase = .previewing
     }
 
-    /// Two captures must agree before either is trusted: one lucky-looking solve isn't enough.
-    /// Then the response sweep, which never fails the calibration, only withholds depth.
+    /// Two captures have to agree before we trust either, then the sweep runs.
+    /// The sweep never fails calibration, it just withholds depth.
     public func capture() {
         guard phase == .previewing, let mainsRegion else { return }
         sweepRetryFallback = nil
         let hz = mainsRegion.referenceFlickerFrequencyHz
-        // Leave `.previewing` now, not when the task first runs, so a second tap can't start
-        // a second calibration alongside this one.
+        // Leave `.previewing` right away so a second tap can't start another calibration.
         phase = .readout(pass: 1, progress: CaptureProgress(framesCaptured: 0, elapsed: 0, duration: captureDuration))
         workTask = Task { await runCalibration(referenceFrequencyHz: hz) }
     }
@@ -124,7 +119,7 @@ public final class CalibrationViewModel {
         guard case .succeeded(let outcome) = phase, !outcome.unlocksDepth || outcome.usesAssumedResponse else { return }
         sweepRetryFallback = outcome
         let readout = outcome.calibration
-        // Leave `.succeeded` now, so a second tap can't start a second sweep.
+        // Leave `.succeeded` right away so a second tap can't start another sweep.
         phase = .measuringResponse(ResponseSweepProgress(
             step: 1,
             stepCount: CaptureStandard.responseSweepSteps,
@@ -133,9 +128,8 @@ public final class CalibrationViewModel {
         workTask = Task { await runResponseSweep(for: readout, generation: generation) }
     }
 
-    /// Stops whatever capture or solve is running. A retried sweep falls back to the
-    /// frequency-only calibration it started from; anything else goes back to aiming. A no-op
-    /// when nothing is running, so closing the sheet on a finished screen keeps its result.
+    /// Stops any running capture or solve. A retried sweep falls back to its frequency-only calibration,
+    /// anything else goes back to aiming. No-op when idle, so closing a finished screen keeps its result.
     public func cancel() {
         guard phase.isRunning else { return }
         generation += 1
@@ -184,9 +178,8 @@ public final class CalibrationViewModel {
             phase = .rejected(solved: solved, plausible: plausible)
             return
         } catch {
-            // A cancellation with `generation` unchanged isn't the user's (`cancel()` bumps it):
-            // the camera was stopped under us (another screen's `stopPreview()`). Say so rather
-            // than sit in a capture phase nothing will advance.
+            // Cancelled without `cancel()` bumping `generation` means something else stopped the camera.
+            // Say so instead of sitting in a capture phase that'll never advance.
             guard generation == self.generation else { return }
             phase = Self.failure(for: error, fallback: "Calibration failed.")
             return
@@ -215,9 +208,8 @@ public final class CalibrationViewModel {
             sweepRetryFallback = nil
             phase = .succeeded(outcome)
         } catch {
-            // Only cancellation reaches here. The user's `cancel()` bumped `generation` and set
-            // the phase; otherwise the camera was stopped under us, and the readout time both
-            // passes agreed on still stands, just without depth.
+            // Only cancellation gets here. If it wasn't the user, the camera was stopped under us,
+            // and the agreed readout time still stands, just without depth.
             guard generation == self.generation else { return }
             if Self.isCancellation(error) {
                 sweepRetryFallback = nil
@@ -260,8 +252,7 @@ public final class CalibrationViewModel {
         return false
     }
 
-    /// The plain message, what to try next, and the technical reason for debug mode: "not
-    /// enough signal" and "this light doesn't flicker" need different next steps.
+    /// The plain message, what to try next, and the debug reason, since "not enough signal" and "no flicker" need different fixes.
     private static func failure(for error: Error, fallback: String) -> Phase {
         let localized = error as? LocalizedError
         var detail: String?
@@ -286,30 +277,6 @@ public final class CalibrationViewModel {
 extension CalibrationViewModel {
     public func previewSeed(phase: Phase) {
         self.phase = phase
-    }
-
-    /// Debug-only. Still requires `mainsRegion`, so the fake can't disagree with the setting.
-    /// Solved "under" the camera's actual standard format so captures after it get full (Tier 1)
-    /// analysis; uses the standard sRGB curve, so depth is flagged as using an assumed response.
-    public func skipForTesting() {
-        guard let mainsRegion else { return }
-        let referenceHz = mainsRegion.referenceFlickerFrequencyHz
-        Task {
-            let format = await runner.activeFormatSignature() ?? .standard()
-            let plausible = DeviceCalibration.plausibleLineReadoutRange(for: format)
-            phase = .succeeded(CalibrationOutcome(
-                calibration: DeviceCalibration(
-                    deviceModelIdentifier: DeviceIdentity.modelIdentifier,
-                    lineReadoutTime: min(18.5e-6, plausible.upperBound * 0.9),
-                    referenceFrequencyHz: referenceHz,
-                    calibratedLineCount: format.height,
-                    format: format,
-                    responseCurve: .standardSRGB,
-                    calibrationVersion: DeviceCalibration.currentVersion
-                ),
-                responseCurveFailure: nil
-            ))
-        }
     }
 }
 #endif

@@ -24,8 +24,7 @@ public enum MothTheme {
         public let isDark: Bool
     }
 
-    // WCAG ≈ primary 13:1, secondary 6.5:1, onAccent 6:1, status ≥ 5:1 on card. Off-white
-    // ground is the biggest glare saving in light mode.
+    // WCAG ≈ primary 13:1, secondary 6.5:1, onAccent 6:1, status ≥ 5:1. The off-white ground cuts the most glare.
     public static let light = Palette(
         background: Color(red: 0.945, green: 0.941, blue: 0.918),
         cardBackground: Color(red: 0.973, green: 0.969, blue: 0.949),
@@ -43,8 +42,7 @@ public enum MothTheme {
         isDark: false
     )
 
-    // WCAG ≈ primary 13:1, secondary 6.7:1, onAccent 8:1. Off-white text and muted sage keep
-    // the brightest thing on screen dim.
+    // WCAG ≈ primary 13:1, secondary 6.7:1, onAccent 8:1. Off-white text and muted sage keep things dim.
     public static let dark = Palette(
         background: Color(red: 0.078, green: 0.090, blue: 0.082),
         cardBackground: Color(red: 0.110, green: 0.125, blue: 0.114),
@@ -131,8 +129,7 @@ extension EnvironmentValues {
     }
 }
 
-/// Also strips animation from every transaction below when motion is off, so no screen
-/// has a check to forget.
+/// Also strips animation from everything below when motion is off, so screens don't have to check.
 public struct MothThemedRoot<Content: View>: View {
     private let appearance: AppearanceMode
     private let animationsEnabled: Bool

@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Non-blocking: shown when this phone's calibration predates the current measurement method.
-/// Measuring still works (presence only) until the user recalibrates.
+/// Non-blocking banner for calibrations from an older method. Measuring still works (presence only) until recalibrated.
 struct RecalibrationBanner: View {
     let onRecalibrate: () -> Void
 

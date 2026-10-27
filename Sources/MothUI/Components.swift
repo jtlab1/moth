@@ -1,8 +1,7 @@
 import MeasurementCore
 import SwiftUI
 
-// Every continuous animation here is slow, dim (under ~⅓ opacity), never flashes, and draws
-// a still frame when `mothMotionEnabled` is false.
+// Continuous animations here are slow, dim (under ~⅓ opacity), never flash, and freeze when motion is off.
 
 // MARK: - Screen background
 
@@ -221,8 +220,7 @@ public struct MothOrb: View {
                     let t = context.date.timeIntervalSinceReferenceDate
                     ZStack {
                         ForEach(0..<ringCount, id: \.self) { ring in
-                            // Linear on purpose: ease-out bunched rings near the edge into
-                            // two quick pulses and a pause.
+                            // Linear on purpose; ease-out bunched the rings into two quick pulses and a pause.
                             let progress = (t / ringPeriod + Double(ring) / Double(ringCount))
                                 .truncatingRemainder(dividingBy: 1)
                             Circle()

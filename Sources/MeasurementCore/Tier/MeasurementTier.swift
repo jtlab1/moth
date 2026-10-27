@@ -1,18 +1,14 @@
 import Foundation
 
-/// Which quantities are recoverable at all, not a quality score: a Tier 3 reading is a
-/// smaller claim, not a worse one.
+/// Which quantities we can recover at all, not a quality score. Tier 3 is a smaller claim, not a worse one.
 public enum MeasurementTier: String, Sendable, Codable, CaseIterable {
     /// Recoverable: frequency, modulation depth, IEEE 1789 verdict.
     case tier1
 
-    /// Line readout time known, but amplitude can't be trusted: the camera's light response
-    /// hasn't been measured, or this capture couldn't hold the standard exposure.
-    /// Recoverable: frequency.
+    /// Frequency only: readout time is known, but the light response wasn't measured or the exposure drifted.
     case tier2
 
-    /// Uncalibrated (or calibrated under an older method), so rows can't map to time.
-    /// Recoverable: presence only.
+    /// Presence only: uncalibrated (or an older calibration), so rows can't map to time.
     case tier3
 }
 

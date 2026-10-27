@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// The name is locked inside a known room: retyping it would silently attach the reading
-/// to a different room via find-or-create by name.
+/// Name is locked inside a known room, since retyping it would quietly save the reading to a different room.
 struct SaveRoomSection: View {
     @Binding var roomName: String
     let isNameLocked: Bool

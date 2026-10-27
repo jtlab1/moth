@@ -4,8 +4,7 @@ import SwiftUI
 import UIKit
 #endif
 
-/// No skip: the app can't do anything without the camera. Resolving access here, before
-/// either view model exists, also stopped their eager prompts racing onboarding.
+/// No skip since the app can't work without the camera. Asking here also stops the view models' prompts racing onboarding.
 public struct CameraAccessGateView: View {
     private enum Phase: Equatable {
         case requesting
@@ -75,7 +74,7 @@ public struct CameraAccessGateView: View {
                 .font(.moth(.title, weight: .bold))
                 .foregroundStyle(palette.primaryText)
                 .multilineTextAlignment(.center)
-            Text("Moth reads how a light flickers straight off the camera sensor — that's the only thing it uses the camera for. No photos or video are ever saved.")
+            Text("Moth reads how a light flickers straight off the camera sensor, and that's the only thing it uses the camera for. No photos or video are ever saved.")
                 .font(.body)
                 .foregroundStyle(palette.secondaryText)
                 .multilineTextAlignment(.center)
@@ -100,7 +99,7 @@ public struct CameraAccessGateView: View {
                 .multilineTextAlignment(.center)
             Text(restricted
                 ? "Camera access is restricted on this device, so Moth can't measure anything. Ask whoever manages this device's restrictions to allow it."
-                : "Moth can't do anything without camera access — there's no other way it measures flicker. Turn it on for Moth in Settings to continue.")
+                : "Moth can't do anything without camera access. There's no other way it measures flicker. Turn it on for Moth in Settings to continue.")
                 .font(.body)
                 .foregroundStyle(palette.secondaryText)
                 .multilineTextAlignment(.center)

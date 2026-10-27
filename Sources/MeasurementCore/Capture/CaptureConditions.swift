@@ -1,8 +1,7 @@
 import Foundation
 
-/// What a readout time and response curve were solved under. A calibration applies only to
-/// captures with a matching signature: readout time per row depends on the sensor mode, and the
-/// response curve on the pixel format.
+/// What a calibration was solved under. It only applies to matching captures,
+/// since readout time depends on sensor mode and the curve on pixel format.
 public struct CaptureFormatSignature: Sendable, Codable, Hashable {
     /// Full sensor-buffer dimensions, before any column strip crop.
     public let width: Int
@@ -53,8 +52,7 @@ public struct CaptureFormatSignature: Sendable, Codable, Hashable {
         )
     }
 
-    /// Prefers the signature the capture layer recorded; otherwise derives one from the source
-    /// dimensions, nominal rate and median read-back exposure.
+    /// Uses the signature the capture layer recorded, or derives one from dimensions, rate and exposure.
     public init(metadata: CaptureMetadata) {
         if let recorded = metadata.conditions?.formatSignature {
             self = recorded
@@ -76,8 +74,7 @@ public struct CaptureFormatSignature: Sendable, Codable, Hashable {
     public var formattedDimensions: String { "\(width)×\(height)" }
 }
 
-/// How a capture was actually taken, recorded with every measurement so readings stay
-/// comparable and an off-standard one can explain itself.
+/// How a capture was actually taken, saved with every measurement so off-standard readings can explain themselves.
 public struct CaptureConditions: Sendable, Codable, Hashable {
     /// Median read-back exposure.
     public let exposureDuration: TimeInterval

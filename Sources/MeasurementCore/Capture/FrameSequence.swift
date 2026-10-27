@@ -26,8 +26,8 @@ public struct FramePlane {
     }
 }
 
-/// `@unchecked Sendable` holds because `buffers` is immutable after handoff and every access
-/// locks read-only. Not `Codable`: Moth never writes camera data to disk.
+/// `@unchecked Sendable` is safe since `buffers` is immutable after handoff and only read under lock.
+/// Not `Codable` because Moth never writes camera data to disk.
 public final class FrameSequence: @unchecked Sendable {
     public let metadata: CaptureMetadata
 
@@ -49,8 +49,7 @@ public final class FrameSequence: @unchecked Sendable {
 
     public var isEmpty: Bool { buffers.isEmpty }
 
-    /// - Throws: `pixelBufferUnreadable` when CoreVideo declines the lock, e.g. for an
-    ///   IOSurface the process no longer owns.
+    /// - Throws: `pixelBufferUnreadable` when CoreVideo won't lock the buffer.
     public func withPlane<R>(
         at index: Int,
         plane: Int = 0,
@@ -114,8 +113,7 @@ public final class FrameSequence: @unchecked Sendable {
         }
     }
 
-    /// Every accessor traps afterwards, rather than analysing a recycled buffer. Not safe to
-    /// call while an analysis is in flight.
+    /// Every accessor traps after this so we never analyze a recycled buffer. Don't call mid-analysis.
     public func releaseFrames() {
         lock.lock()
         released = true
@@ -138,8 +136,7 @@ public final class FrameSequence: @unchecked Sendable {
     }
 }
 
-/// Confined to the capture delegate queue. Appended buffers must be app-owned copies:
-/// holding AVFoundation's own pool buffers starves it into dropping frames.
+/// Only used on the capture delegate queue. Buffers must be our own copies, or AVFoundation's pool starves and drops frames.
 public final class FrameSequenceBuilder {
     /// A runaway-capture backstop, not a budget: 600 1080p frames is ~1.8 GB.
     public let maximumFrameCount: Int

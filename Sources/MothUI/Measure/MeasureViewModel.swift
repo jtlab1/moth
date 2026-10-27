@@ -22,8 +22,7 @@ public final class MeasureViewModel {
     public private(set) var draft: MeasurementDraft?
     public var comfortRating: Int?
 
-    /// The standard format the camera captures in, once prepared: what a calibration must
-    /// match to apply. `nil` until then (and on hardware without a camera).
+    /// The format the camera captures in, which a calibration has to match. `nil` until prepared or with no camera.
     public private(set) var captureFormat: CaptureFormatSignature?
 
     private let runner: MeasurementRunner
@@ -33,8 +32,7 @@ public final class MeasureViewModel {
     /// Started in `init` so camera setup finishes while the app is still launching.
     private var prepareTask: Task<Void, Error>?
 
-    /// Bumped by `reset()`; async work captured before a reset writes nothing, so a late
-    /// capture can't surface a savable result in the next room's sheet.
+    /// Bumped by `reset()` so late async work can't show a savable result in the next room's sheet.
     private var generation = 0
     private var captureTask: Task<Void, Never>?
 
@@ -127,16 +125,14 @@ public final class MeasureViewModel {
         }
     }
 
-    /// Also called after calibrating, since the format a calibration records is what the
-    /// camera actually delivered.
+    /// Also called after calibrating, since the calibration records whatever format the camera actually delivered.
     public func refreshCaptureFormat() async {
         if let format = await runner.activeFormatSignature() {
             captureFormat = format
         }
     }
 
-    /// Clears state synchronously so nothing stale renders even for a frame: this view model
-    /// is shared across every room's sheet.
+    /// Clears state synchronously so nothing stale flashes, since this view model is shared across every room's sheet.
     public func reset() {
         generation += 1
         captureTask?.cancel()

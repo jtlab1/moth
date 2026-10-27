@@ -1,8 +1,7 @@
 import Foundation
 import MeasurementCore
 
-/// What format selection needs to know about an `AVCaptureDevice.Format`, as plain values so
-/// the policy is testable without a camera.
+/// Plain-value view of an `AVCaptureDevice.Format` so format selection is testable without a camera.
 struct CaptureFormatDescriptor: Sendable, Equatable {
     let width: Int
     let height: Int
@@ -31,8 +30,7 @@ struct CaptureFormatDescriptor: Sendable, Equatable {
         self.isBinned = isBinned
     }
 
-    /// AVFoundation reports ranges like 1...30 as floating point; a hair of slack keeps 29
-    /// inside a range that nominally ends at exactly 29.
+    /// AVFoundation ranges are floats, so a little slack keeps 29 inside a range that ends at exactly 29.
     var supportsStandardFrameRate: Bool {
         let rate = CaptureStandard.frameRate
         return frameRateRanges.contains { $0.lowerBound <= rate + 1e-3 && rate - 1e-3 <= $0.upperBound }
@@ -43,9 +41,8 @@ struct CaptureFormatDescriptor: Sendable, Equatable {
     }
 }
 
-/// Picks the one format every phone measures in (spec A). Deliberately never prefers a higher
-/// frame rate: the standard is 29 fps, and a high-speed mode is a different, usually binned,
-/// readout.
+/// Picks the one format every phone measures in. Never prefers higher frame rates,
+/// since high-speed modes are usually binned and read out differently.
 enum CaptureFormatSelector {
 
     /// False if the format can't run the standard at all.
@@ -57,10 +54,8 @@ enum CaptureFormatSelector {
             && format.width > 0
     }
 
-    /// Ordered priorities, compared lexicographically (smaller is better): exact 1920×1080,
-    /// then height closest to 1080, then full range, then able to reach the standard exposure,
-    /// then not binned, then the lowest maximum frame rate (the plain video mode rather than a
-    /// high-speed one that happens to include 29), then the widest buffer.
+    /// Priorities, smaller wins: exact 1920×1080, closest height, full range, reaches standard exposure,
+    /// not binned, lowest max frame rate, then widest buffer.
     struct Rank: Comparable {
         let notPreferredDimensions: Int
         let heightDistance: Int
@@ -94,8 +89,7 @@ enum CaptureFormatSelector {
         )
     }
 
-    /// Index into `formats` of the standard format; the first of equals wins, so the choice is
-    /// stable for a given device's format list. `nil` if nothing is eligible.
+    /// Index of the standard format, first of equals wins so the pick is stable. `nil` if nothing qualifies.
     static func bestIndex(of formats: [CaptureFormatDescriptor]) -> Int? {
         var best: (index: Int, rank: Rank)?
         for (index, format) in formats.enumerated() where isEligible(format) {

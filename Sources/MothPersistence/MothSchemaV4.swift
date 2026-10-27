@@ -2,9 +2,8 @@ import Foundation
 import MeasurementCore
 import SwiftData
 
-/// Adds the capture standard: calibration format signature, response curve and method version;
-/// measurement capture conditions. Every new attribute is defaulted or optional so V3 → V4 is
-/// lightweight, and migrated calibrations land on version 1, which reads as outdated.
+/// Adds the capture standard fields. Everything new is optional or defaulted so V3 → V4 is lightweight,
+/// and migrated calibrations land on version 1, which reads as outdated.
 public enum MothSchemaV4: VersionedSchema {
     // V2 and V3 share 2.0.0; 4.0.0 keeps this one unambiguous.
     public static var versionIdentifier: Schema.Version { Schema.Version(4, 0, 0) }
@@ -141,8 +140,7 @@ extension MothSchemaV4 {
         public var mainsRegionRaw: String?
         public var comfortRating: Int?
 
-        // Capture conditions, denormalised from `flickerData` so they can be queried; `nil` for
-        // measurements taken before the capture standard.
+        // Capture conditions copied out of `flickerData` so they're queryable; `nil` for pre-standard measurements.
         public var exposureDuration: Double?
         public var iso: Double?
         public var frameRate: Double?

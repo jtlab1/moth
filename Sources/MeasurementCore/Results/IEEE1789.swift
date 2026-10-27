@@ -1,12 +1,6 @@
 import Foundation
 
-/// One definition of the IEEE 1789-2015 limits, so the analyser and UI can't disagree.
-///
-/// | Frequency        | No-observable-effect | Low-risk         |
-/// |------------------|----------------------|------------------|
-/// | f < 90 Hz        | Mod% < 0.01 × f      | Mod% < 0.025 × f |
-/// | 90 ≤ f < 1250 Hz | Mod% < 0.0333 × f    | Mod% < 0.08 × f  |
-/// | f ≥ 1250 Hz      | unrestricted         | unrestricted     |
+/// IEEE 1789-2015 limits in one place so the analyzer and UI can't disagree.
 public enum IEEE1789 {
 
     public static let unrestrictedAboveHz: Double = 1250
@@ -24,8 +18,7 @@ public enum IEEE1789 {
         return frequencyHz < boundaryHz ? 0.025 * frequencyHz : 0.08 * frequencyHz
     }
 
-    /// Boundaries resolve to the safer region: rounding a boundary case towards alarm would
-    /// overstate what was measured.
+    /// Boundary cases land in the safer region, since rounding toward alarm would overstate the measurement.
     public static func classify(frequencyHz: Double, modulationDepthPercent: Double) -> IEEE1789Verdict {
         guard let noEffect = noObservableEffectLimitPercent(frequencyHz: frequencyHz),
               let lowRisk = lowRiskLimitPercent(frequencyHz: frequencyHz) else {

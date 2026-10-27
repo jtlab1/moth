@@ -1,7 +1,6 @@
 import Foundation
 
-// Plain Sendable structs, not SwiftData `@Model` classes, so results cross from the
-// analysis actor to SwiftUI freely; the storage layer maps them.
+// Plain Sendable structs instead of `@Model` classes so results move freely from analysis to SwiftUI.
 
 /// Flat, no floors or wings: the name is the grouping key people already use.
 public struct Building: Sendable, Codable, Hashable, Identifiable {

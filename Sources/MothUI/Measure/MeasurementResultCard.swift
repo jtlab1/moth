@@ -3,8 +3,7 @@ import MeasurementCore
 import MothCapture
 import SwiftUI
 
-/// Words, then numbers, then confidence; everything technical folds behind "Details" so
-/// the first read is short.
+/// Words, then numbers, then confidence. The technical stuff folds behind "Details" to keep the first read short.
 struct MeasurementResultCard: View {
     let draft: MeasurementDraft
     @Environment(\.mothPalette) private var palette

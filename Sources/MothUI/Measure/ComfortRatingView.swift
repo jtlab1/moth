@@ -1,8 +1,7 @@
 import MeasurementCore
 import SwiftUI
 
-/// Buttons, not a slider: every choice visible, one tap, nothing moving under the finger.
-/// Tapping the selection again clears it.
+/// Buttons instead of a slider so every choice is visible and nothing moves under your finger. Tap again to clear.
 struct ComfortRatingView: View {
     @Binding var rating: Int?
     @Environment(\.mothPalette) private var palette

@@ -90,11 +90,10 @@ public enum MeasurementConfidence: String, Sendable, Codable, CaseIterable {
     }
 }
 
-/// The initialiser silently drops fields the tier can't support, so no view can leak one.
-/// Silent rather than trapping so analysers can hand over everything and let the tier decide.
+/// The init quietly drops fields the tier can't support so no view can leak one,
+/// and analyzers can just hand over everything.
 public struct FlickerResult: Sendable, Hashable {
-    /// Bumped when the analysis method changes what a result means. Results stored before
-    /// version 2 decode as 1.
+    /// Bumped when the analysis method changes what a result means. Pre-version-2 results decode as 1.
     public static let currentAnalysisVersion = 2
 
     public let frequencyHz: Double?
@@ -149,8 +148,7 @@ public struct FlickerResult: Sendable, Hashable {
     public var diagnosticNote: String? { diagnosticNotes.first }
 }
 
-// Hand-written so results stored before analysis version 2 (a single `diagnosticNote`, no
-// conditions) still decode; and decoding goes through `init` so the tier gate re-applies.
+// Hand-written so pre-version-2 results still decode, and goes through `init` so the tier gate re-applies.
 extension FlickerResult: Codable {
     private enum CodingKeys: String, CodingKey {
         case frequencyHz, modulationDepthPercent, verdict, presence, confidence, tier, analyzedAt
@@ -195,8 +193,7 @@ extension FlickerResult: Codable {
     }
 }
 
-/// Worst sorts highest. `.detectedUnrated` outranks `.lowRisk`: an ungraded flickering fixture
-/// deserves a visit more than one checked and found benign.
+/// Worst sorts highest. An ungraded flickering fixture outranks `.lowRisk` since it's more worth a look.
 public enum FlickerSeverity: Int, Sendable, Codable, CaseIterable, Comparable {
     case unknown = 0
     case none = 1

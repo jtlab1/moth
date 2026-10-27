@@ -21,8 +21,7 @@ public struct CalibrationView: View {
     }
 
     public var body: some View {
-        // Animated on the whole VStack: animating only the phase card let `explanationCard`
-        // snap into place over the still-shrinking preview.
+        // Animate the whole VStack; animating just the phase card made `explanationCard` snap over the shrinking preview.
         ScrollView {
             VStack(spacing: MothTheme.sectionSpacing) {
                 stepTracker
@@ -71,10 +70,6 @@ public struct CalibrationView: View {
                 }
 
                 explanationCard
-
-                #if DEBUG
-                debugSkipButton
-                #endif
             }
             .padding(MothTheme.sectionSpacing)
             .animation(MothTheme.Motion.smooth, value: viewModel.phase)
@@ -144,24 +139,6 @@ public struct CalibrationView: View {
         .accessibilityLabel(Text("Step \(currentStep + 1) of \(Self.stepTitles.count): \(Self.stepTitles[currentStep])"))
     }
 
-    #if DEBUG
-    /// Debug-only skip for testing without a fixture or camera; needs a mains region.
-    @ViewBuilder
-    private var debugSkipButton: some View {
-        if !isSucceeded {
-            Button("Skip Calibration (DEBUG)") { viewModel.skipForTesting() }
-                .font(.footnote)
-                .foregroundStyle(palette.warning)
-                .disabled(viewModel.mainsRegion == nil)
-        }
-    }
-
-    private var isSucceeded: Bool {
-        if case .succeeded = viewModel.phase { return true }
-        return false
-    }
-    #endif
-
     private var mainsRegionContent: some View {
         VStack(spacing: 16) {
             MothIconBadge(systemImage: "bolt.fill", size: 64)
@@ -223,8 +200,7 @@ public struct CalibrationView: View {
         .frame(maxWidth: .infinity, minHeight: 160)
     }
 
-    /// One view across every camera phase so the preview layer keeps one identity (see
-    /// `MeasureView.showsLivePreview`). `.solving` keeps it since another capture usually follows.
+    /// One view across all camera phases so the preview layer keeps its identity (see `MeasureView.showsLivePreview`).
     private var liveCameraContent: some View {
         VStack(spacing: 16) {
             MeasureCameraPreview(session: viewModel.previewSession)
@@ -250,11 +226,11 @@ public struct CalibrationView: View {
                 .transition(.opacity)
             default:
                 VStack(spacing: 10) {
-                    Label("Aim at an older fluorescent tube or an incandescent bulb — not an LED — and hold still.", systemImage: "lightbulb.fill")
+                    Label("Aim at an older fluorescent tube or an incandescent bulb (not an LED) and hold still.", systemImage: "lightbulb.fill")
                         .font(.footnote.weight(.medium))
                         .foregroundStyle(palette.primaryText)
                         .multilineTextAlignment(.leading)
-                    Text("Moth captures twice and checks the two readings agree, then takes a few short captures to learn how your camera responds to light. Keep holding still until it’s done — about twenty seconds.")
+                    Text("Moth captures twice and checks the two readings agree, then takes a few short captures to learn how your camera responds to light. Keep holding still until it’s done, about twenty seconds.")
                         .font(.caption)
                         .foregroundStyle(palette.secondaryText)
                         .multilineTextAlignment(.center)
@@ -292,11 +268,11 @@ public struct CalibrationView: View {
         let passCount = MeasurementRunner.readoutPassCount
         VStack(spacing: 12) {
             if progress.isDim {
-                CaptureQualityWarning(message: "Too dark to calibrate — aim more directly at the reference fixture.")
+                CaptureQualityWarning(message: "Too dark to calibrate. Aim more directly at the reference fixture.")
             }
             MothProgressBar(value: progress.fraction)
             HStack {
-                Text(pass > 1 ? "Hold still — confirming…" : "Hold still — calibrating…")
+                Text(pass > 1 ? "Hold still, confirming…" : "Hold still, calibrating…")
                 Spacer()
                 Text("Pass \(pass) of \(passCount)")
                     .foregroundStyle(palette.accent)
@@ -313,11 +289,11 @@ public struct CalibrationView: View {
     private func responseProgressContent(_ progress: ResponseSweepProgress) -> some View {
         VStack(spacing: 12) {
             if progress.isDim {
-                CaptureQualityWarning(message: "Too dark to read the light — keep aiming at the same fixture as before.")
+                CaptureQualityWarning(message: "Too dark to read the light. Keep aiming at the same fixture as before.")
             }
             MothProgressBar(value: progress.fraction)
             HStack(alignment: .firstTextBaseline) {
-                Text("Hold still — measuring how your camera responds to light")
+                Text("Hold still, measuring how your camera responds to light")
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Text("Step \(progress.step) of \(progress.stepCount)")
@@ -366,8 +342,7 @@ public struct CalibrationView: View {
         }
     }
 
-    /// Calibrated with the standard light response: everything works, depth slightly less
-    /// precisely; retrying the sweep is offered, never required.
+    /// Calibrated with the standard light response. Everything works, depth is a bit less precise, retry is optional.
     private func assumedResponseContent(_ outcome: CalibrationOutcome) -> some View {
         VStack(spacing: 14) {
             CalibrationSuccessMark()

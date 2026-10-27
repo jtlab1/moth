@@ -1,8 +1,8 @@
 import MeasurementCore
 import SwiftUI
 
-/// How a reading was captured, folded away: useful when two readings disagree, noise otherwise.
-/// Renders nothing for readings from before conditions were recorded (and with no notes).
+/// How a reading was captured, tucked away since it's only useful when readings disagree.
+/// Shows nothing for old readings without conditions or notes.
 struct CaptureDetailsDisclosure: View {
     let flicker: FlickerResult
 

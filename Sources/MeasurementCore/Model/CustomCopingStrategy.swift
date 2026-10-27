@@ -1,7 +1,6 @@
 import Foundation
 
-/// One shared list across rooms, since what helps in one room usually helps in the next;
-/// each room records only whether it's checked.
+/// One list shared across rooms, since what helps in one usually helps in the next. Rooms just track what's checked.
 public struct CustomCopingStrategy: Sendable, Codable, Hashable, Identifiable {
     public let id: UUID
     public var title: String

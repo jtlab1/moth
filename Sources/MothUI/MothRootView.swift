@@ -3,10 +3,8 @@ import MothCapture
 import MothPersistence
 import SwiftUI
 
-/// Onboarding, then camera access, then a first calibration gate everything: an
-/// uncalibrated Tier 3 reading is a much weaker product than a one-time calibration unlocks.
-/// The gate never reappears, but Measure still refuses a stale calibration. A calibration
-/// from an older measurement method is different: it gets a non-blocking banner, not the gate.
+/// Onboarding, then camera access, then a one-time calibration gate, since uncalibrated readings are much weaker.
+/// Measure still refuses stale calibrations, and an older-method calibration just gets a banner.
 public struct MothRootView: View {
     private enum Tab: Hashable { case measure, rooms, buildings, settings }
 
@@ -40,8 +38,7 @@ public struct MothRootView: View {
 
     @State private var showingAddRoom = false
     @State private var showingAddBuilding = false
-    /// Consumed in the add sheet's `onDismiss`: presenting a sheet in the same update that
-    /// dismisses another is a SwiftUI race.
+    /// Handled in the add sheet's `onDismiss`, since presenting one sheet while dismissing another races in SwiftUI.
     @State private var roomPendingMeasurementAfterCreation: Room?
     @State private var roomBeingMeasured: Room?
     /// Consumed in the measure sheet's `onDismiss`, like `roomPendingMeasurementAfterCreation`.
@@ -63,8 +60,7 @@ public struct MothRootView: View {
             openedStore = store
             _showingStoreFailureAlert = State(initialValue: false)
         } else {
-            // In-memory keeps the session usable instead of crashing; the alert makes the
-            // degradation visible. A second failure is a schema bug, hence the precondition.
+            // Fall back to in-memory so the app stays usable and show an alert. A second failure is a schema bug.
             guard let inMemory = try? MothStore.makeInMemory() else {
                 preconditionFailure("MothStore.makeInMemory() failed to build its own schema")
             }
@@ -74,8 +70,7 @@ public struct MothRootView: View {
         _store = State(initialValue: openedStore)
 
         var loadedSettings = settingsStorage.load() ?? .default
-        // Builds from before settings were saved never recorded onboarding; anyone with
-        // data on disk has been through it.
+        // Older builds never saved onboarding, so anyone with data on disk has already been through it.
         if !loadedSettings.hasCompletedOnboarding,
            !openedStore.calibrations.isEmpty || !openedStore.rooms.isEmpty {
             loadedSettings.hasCompletedOnboarding = true
@@ -84,8 +79,7 @@ public struct MothRootView: View {
     }
 
     public var body: some View {
-        // Presenting modifiers must live inside `MothThemedRoot`'s content, or what they
-        // present inherits the unthemed environment.
+        // Presenting modifiers have to live inside `MothThemedRoot`, or what they present loses the theme.
         MothThemedRoot(appearance: settings.appearance, animationsEnabled: settings.animationsEnabled) {
             ZStack {
                 if !settings.hasCompletedOnboarding {
@@ -139,7 +133,7 @@ public struct MothRootView: View {
             }
             .sheet(
                 isPresented: $showingCalibrationSheet,
-                // Covers Close and swipe-down alike: no capture keeps running unseen.
+                // Covers Close and swipe-down, so no capture keeps running unseen.
                 onDismiss: { calibrationViewModel?.cancel() }
             ) {
                 NavigationStack {
@@ -172,8 +166,8 @@ public struct MothRootView: View {
         settings.mainsRegion = MainsRegion.inferred(fromRegionCode: Locale.current.region?.identifier)
     }
 
-    /// A calibration solved for the old mains frequency would yield confident, wrong
-    /// frequencies. The record is kept; only `calibrationState`'s reading of it changes.
+    /// A calibration from the old mains frequency would give confident wrong answers.
+    /// The record stays; only how `calibrationState` reads it changes.
     private func invalidateCalibrationIfMainsChanged(to newValue: MainsRegion?) {
         guard case .calibrated(let calibrated) = storedCalibrationState else { return }
         guard let newValue, calibrated.referenceFrequencyHz != newValue.referenceFlickerFrequencyHz else { return }
@@ -186,9 +180,8 @@ public struct MothRootView: View {
 
     // MARK: - Calibration state
 
-    /// Ignores the mains setting; drives the one-time first-run gate. Format-aware once the
-    /// camera has reported its standard format, so a calibration from another format reads as
-    /// `.outdated` before a capture, not only inside one.
+    /// Drives the one-time first-run gate and ignores mains. Once the format's known,
+    /// a calibration from another format shows as `.outdated` before capturing.
     private var storedCalibrationState: CalibrationState {
         let model = DeviceIdentity.modelIdentifier
         if let format = measureViewModel?.captureFormat {
@@ -197,8 +190,7 @@ public struct MothRootView: View {
         return store.calibrationState(forDeviceModelIdentifier: model)
     }
 
-    /// Stays true once set, so the full-screen gate never reappears. An outdated calibration
-    /// still counts: that user has calibrated before and gets a banner instead.
+    /// Stays true once set so the gate never comes back. Outdated calibrations count too and get a banner.
     private var hasEverCalibratedThisDevice: Bool {
         switch storedCalibrationState {
         case .calibrated, .outdated: return true
@@ -233,8 +225,7 @@ public struct MothRootView: View {
     /// Shared by the Measure tab and the "Measure This Room" sheet.
     @ViewBuilder
     private func measureContent(presetRoomName: String? = nil, showsLivePreview: Bool = true) -> some View {
-        // Outdated still measures (presence only, Tier 3) under a banner; anything else
-        // uncalibrated is blocked until calibrated.
+        // Outdated still measures (Tier 3, presence only) under a banner; any other uncalibrated state is blocked.
         if !calibrationState.isCalibrated && !calibrationState.isOutdated {
             calibrationRequiredPrompt
         } else if let measureViewModel {
@@ -273,8 +264,7 @@ public struct MothRootView: View {
         .mothAppear()
     }
 
-    /// From inside a room's measure sheet, waits for it to close first (see
-    /// `roomPendingMeasurementAfterCreation` for why).
+    /// From inside a room's measure sheet, waits for it to close first (see `roomPendingMeasurementAfterCreation`).
     private func beginRecalibrating() {
         if roomBeingMeasured != nil {
             recalibrateAfterMeasureSheet = true
@@ -472,8 +462,7 @@ public struct MothRootView: View {
             .sheet(
                 item: $roomBeingMeasured,
                 onDismiss: {
-                    // `measureViewModel` is shared with the Measure tab, so a stuck state must
-                    // not survive the sheet closing.
+                    // `measureViewModel` is shared with the Measure tab, so reset any stuck state when the sheet closes.
                     measureViewModel?.reset()
                     if recalibrateAfterMeasureSheet {
                         recalibrateAfterMeasureSheet = false
@@ -493,8 +482,7 @@ public struct MothRootView: View {
             }
     }
 
-    /// Resets the shared view model first, so a stale result can't be shown or saved against
-    /// the wrong room.
+    /// Resets the shared view model first so a stale result can't be shown or saved to the wrong room.
     private func beginMeasuring(_ room: Room) {
         measureViewModel?.reset()
         roomBeingMeasured = room
@@ -704,8 +692,7 @@ public struct MothRootView: View {
         }
     }
 
-    /// Debug only, for demoing onboarding. Wipes the store first so no calibration remains to
-    /// warn about. Camera permission can't be revoked from here.
+    /// Debug only, for demoing onboarding. Wipes the store first; camera permission can't be revoked from here.
     private func forgetEverything() {
         do {
             try store.wipeAll()
@@ -755,8 +742,8 @@ public struct MothRootView: View {
     }
 }
 
-/// Builds the pushed screen in its own `body` so its `MothStore` reads are observed;
-/// `navigationDestination` closures aren't tracked, so pushed screens went stale.
+/// Builds the pushed screen in its own `body` so `MothStore` reads get observed.
+/// `navigationDestination` closures aren't tracked, which left pushed screens stale.
 private struct LiveDestination<Content: View>: View {
     let content: () -> Content
 

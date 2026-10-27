@@ -1,11 +1,9 @@
 import Foundation
 
-/// Display-only re-derivation, kept apart from `RealFlickerAnalyzer` so the fixed
-/// `FlickerAnalyzing` seam doesn't change to show a picture.
+/// Display-only, kept separate from `RealFlickerAnalyzer` so showing a picture doesn't change the analyzer API.
 public enum FlickerWaveformBuilder {
-    /// Folds the flat-field ratio, so the lamp's shape and the scene don't draw on the picture.
-    /// Uses the capture's own linearisation when it has one; otherwise falls back to an assumed
-    /// Rec.709 decode, which is fine for a picture and never used for depth.
+    /// Folds the flat-field ratio so the scene doesn't show up in the picture.
+    /// Falls back to an assumed Rec.709 decode when uncalibrated, which is fine for display but never used for depth.
     public static func fold(
         capture: RowBrightnessCapture,
         frequencyHz: Double,

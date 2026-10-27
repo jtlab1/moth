@@ -1,8 +1,7 @@
 import MeasurementCore
 import SwiftUI
 
-/// Same order as `RoomsListView` so the tabs never disagree, but empty buildings get a card:
-/// the one place a new building is visible before it has rooms.
+/// Same order as `RoomsListView`, but empty buildings get a card so new ones show up before they have rooms.
 public struct BuildingListView: View {
     let buildingSummaries: [BuildingSummary]
     let onSelectRoom: (RoomSummary) -> Void

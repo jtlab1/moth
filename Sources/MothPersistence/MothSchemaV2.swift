@@ -2,8 +2,7 @@ import Foundation
 import MeasurementCore
 import SwiftData
 
-/// Adds `RoomRecord.copingStrategyRawValues`. Versioned schemas are self-contained
-/// snapshots, so every model is redeclared.
+/// Adds `RoomRecord.copingStrategyRawValues`. Schemas are self-contained snapshots, so every model is redeclared.
 public enum MothSchemaV2: VersionedSchema {
     public static var versionIdentifier: Schema.Version { Schema.Version(2, 0, 0) }
 

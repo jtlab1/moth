@@ -1,14 +1,8 @@
 import Accelerate
 import Foundation
 
-/// Uses rolling-shutter row timing, not frame rate, whose Nyquist can't reach 100+ Hz flicker.
-///
-/// Pipeline (spec C): per-pixel linearisation through the calibration's response curve →
-/// flat-field ratio `r = v / M(row)` → frequency search in Hz (incoherent per-frame spectrum
-/// above ~1.5 cycles per readout window, coherent across frames below it, coherent refine,
-/// frame-rate alias check) → exposure-corrected Fourier depth from a phase fold → presence in
-/// modulation units → confidence from split halves, motion and capture conditions.
-/// Every threshold is the same on every phone; none depends on the sensor's noise level.
+/// Measures flicker from rolling-shutter row timing, since frame rate alone can't reach 100+ Hz.
+/// Every threshold is the same on every phone and doesn't depend on sensor noise.
 public struct RealFlickerAnalyzer: FlickerAnalyzing {
     public init() {}
 
@@ -21,30 +15,21 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
     /// Fraction of the row sampling rate (1/L) searched; above it a row mean blurs the cycle.
     static let rowNyquistFraction: Double = 0.4
 
-    /// The incoherent per-frame stage needs this many cycles inside one frame's readout to
-    /// resolve a peak; below it the coherent cross-frame stage takes over.
+    /// Cycles needed in one frame's readout for the per-frame search; below this the cross-frame search takes over.
     static let cyclesPerReadoutFloor: Double = 1.5
 
-    /// Coherent lines are ~1/duration (0.25 Hz) wide; 0.05 Hz loses at most ~3% power between
-    /// grid points.
+    /// Coherent peaks are ~0.25 Hz wide, so a 0.05 Hz step loses at most ~3% power.
     static let coherentGridStepHz: Double = 0.05
     static let fineGridStepHz: Double = 0.002
 
-    /// A runner-up alias tooth at ≥ `CaptureStandard.aliasAmbiguityRatio` of the best power
-    /// is only ambiguous if the best's amplitude lead is under this many noise sigmas: with a
-    /// short readout window the teeth differ by a few percent, which a clean capture still
-    /// resolves.
+    /// How many noise sigmas the best alias tooth needs to lead the runner-up by before we call it unambiguous.
     static let aliasDeficitSigma: Double = 6
 
-    /// Caps the alias teeth's assumed noise correlation, so the deficit test never demands
-    /// less than σ·√0.02 of lead.
+    /// Caps the assumed noise correlation between alias teeth so the lead test never gets too lax.
     static let maximumAliasNoiseCorrelation: Double = 0.99
 
-    /// A slow brightness change (drift, an exposure or hand wobble) moves every frame's mean,
-    /// which the cross-frame transform sees as teeth at n × fps ± its rate. A peak that its
-    /// own slow tooth (|f − n·fps| < fps/2, below the search) explains at least as well is
-    /// such a tooth, not flicker: its teeth within this many Hz are excluded and the search
-    /// rerun, up to `maximumSlowAliasExclusions` times.
+    /// Slow brightness drift (hand wobble, exposure) shows up as fake peaks near multiples of the frame rate.
+    /// When a peak looks like one, nearby teeth within this many Hz are excluded and the search reruns.
     static let slowAliasExclusionHz: Double = 0.5
     static let maximumSlowAliasExclusions = 3
 
@@ -56,18 +41,13 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
     /// Read-back exposure or ISO further than this from its median counts as unstable.
     static let stableExposureTolerance: Double = 0.01
 
-    /// RMS (ratio units) of the per-frame line fitted to the residual; above it the phone
-    /// moved or the scene changed enough to cost confidence.
+    /// RMS of the leftover per-frame trend; above this the phone or scene moved enough to cost confidence.
     static let motionResidualLimit: Double = 0.01
 
-    /// …or above this fraction of the fundamental, whichever is larger: a deep, sharp PWM
-    /// leaves fold-model residue of a few percent of its swing with no motion at all, and
-    /// motion matters only relative to the flicker it could corrupt.
+    /// Or this fraction of the fundamental if larger, since sharp PWM leaves some residue even with no motion.
     static let motionResidualAmplitudeFraction: Double = 0.05
 
-    /// A kept harmonic in the top half of the exposure's band at least this fraction of the
-    /// fundamental means the spectrum was cut off rather than decayed: reconstruct with
-    /// Lanczos σ-factors so the cut doesn't ring (Gibbs overshoot reads as ~18% extra depth).
+    /// A high harmonic this strong means the exposure cut the spectrum off, so smooth with Lanczos to avoid ringing.
     static let truncationHarmonicRatio: Double = 0.02
 
     static let reconstructionPoints = 512
@@ -147,9 +127,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
             }
         }
 
-        // Stage 1b (coherent, 20 Hz up to the incoherent stage's floor), the coherent peak
-        // around stage 1's, then stage 2's coherent refine with the frame-rate alias teeth in
-        // view. Repeated with the teeth of any slow brightness change excluded (`slowAlias`).
+        // Search coherently below stage 1's floor and around its peak, then refine with the alias teeth in view.
+        // Reruns with any slow drift's teeth excluded.
         var slowAliases: [Double] = []
         func searchCoherently() throws -> Refined {
             let excluded: ((Double) -> Bool)? = slowAliases.isEmpty ? nil : { hz in
@@ -178,9 +157,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
                 coherent.amplitude(atHz: $0, frames: allFrames) < coherent.amplitude(atHz: $1, frames: allFrames)
             }!
             var refined = try Self.refine(coherent, around: coarseHz, halfBand: halfBand, frameRate: frameRate, search: search, frames: allFrames, excluding: excluded)
-            // Stage 1's peak can sit further from the line than the refine band (a few
-            // per-frame resolutions when saturated rows leave the frame gappy), and the
-            // refine then settles on an alias tooth. The true line is the strongest tooth.
+            // Stage 1 can land far enough off that the refine picks an alias tooth, so jump to the strongest tooth.
             let tooth = Self.strongestAliasTooth(
                 coherent, of: refined.frequency, frameRate: frameRate,
                 span: max(halfBand, Self.aliasToothSpanResolutions / readoutWindow),
@@ -218,8 +195,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
             )
         }
 
-        // A light whose 2nd or 3rd harmonic outshines its fundamental (magnetic ballasts,
-        // short-duty PWM) still repeats at the fundamental, which is what IEEE 1789 rates.
+        // Some lights have a stronger 2nd or 3rd harmonic, but they still repeat at the fundamental, which IEEE 1789 rates.
         let geometry = FoldGeometry(field: field, lineReadoutTime: lineReadoutTime)
         var frequency = refined.frequency
         for _ in 0..<2 {
@@ -227,9 +203,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
                 of: frequency, field: field, geometry: geometry, coherent: coherent,
                 exposure: exposure.medianDuration, frameRate: frameRate, search: search, frames: allFrames
             ) else { break }
-            // Located on the residual, where the stronger harmonic's alias teeth (which a
-            // refine on the full spectrum would land on) are gone; the harmonic relation
-            // already fixes which tooth is the line.
+            // Found on the residual, where the stronger harmonic's alias teeth are gone.
             frequency = fundamental
             refined = Refined(
                 frequency: fundamental,
@@ -240,14 +214,10 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         }
         try Task.checkCancellation()
 
-        // Model, residual and noise. The residual's own per-frame spectrum at a frequency is the
-        // noise there, correlated noise (motion, scene) included.
+        // The residual's per-frame spectrum is the noise level, motion and scene changes included.
         let exposureDuration = exposure.medianDuration
-        // Now the frequency is known, M(row) can be re-estimated with the flicker modelled
-        // instead of averaged out: v = M(row) · w(phase), solved by alternating least squares.
-        // With uniform phase drift this is the plain temporal mean; with only a few cycles of
-        // drift (e.g. 2 kHz at 29 fps) the plain mean keeps a row-locked residue of the flicker
-        // that biases depth and inflates the noise estimate.
+        // Now that we know the frequency, re-estimate M(row) with the flicker modeled instead of averaged out.
+        // The plain mean leaves flicker residue when the phase barely drifts (e.g. 2 kHz at 29 fps).
         var field = field
         for _ in 0..<Self.flatFieldRefinements {
             let fold = PhaseFold(geometry: geometry, field: field, frequency: frequency, frames: allFrames)
@@ -276,8 +246,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         let depthEstimateSigma = 100 * sigma / gainFloor
         let presence = Self.presence(significance: significance, depthPercent: depthEstimate)
 
-        // Tier, decided from what this capture did, before the presence branch so it reads the
-        // same whether or not flicker was found.
+        // Decide the tier up front so it's the same whether or not flicker was found.
         let (tier, tierNotes) = Self.calibratedTier(metadata: metadata, exposure: exposure)
         notes.append(contentsOf: tierNotes)
 
@@ -308,9 +277,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         if let runnerUp = refined.runnerUpFrequency,
            refined.runnerUpPower >= CaptureStandard.aliasAmbiguityRatio * refined.power {
             let runnerUpAmplitude = coherent.sinusoidFit(atHz: runnerUp, frames: allFrames).amplitude
-            // Both teeth are estimated from the same samples, their noise correlated about
-            // as strongly as the teeth resemble each other (ρ ≈ runner-up / best), so the
-            // lead's noise is σ·√(2(1 − ρ)), not the independent σ·√2.
+            // Both teeth come from the same samples, so their noise is correlated and the lead's noise is smaller than σ·√2.
             let correlation = min(Self.maximumAliasNoiseCorrelation, max(0, runnerUpAmplitude / amplitude))
             if amplitude - runnerUpAmplitude < Self.aliasDeficitSigma * sigma * (2 * (1 - correlation)).squareRoot() {
                 throw AnalysisError.ambiguousFrequency(candidates: [frequency, runnerUp].sorted())
@@ -435,8 +402,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         )
     }
 
-    /// Tier 1 unless the calibration lacks a response curve or this capture left the
-    /// standard; always clamped by the device. Notes only where Tier 1 was attainable.
+    /// Tier 1 unless there's no response curve or the exposure left the standard, capped by the device.
+    /// Only adds notes when the device could have reached Tier 1.
     static func calibratedTier(metadata: CaptureMetadata, exposure: ExposureSummary) -> (MeasurementTier, [String]) {
         var candidateTier = MeasurementTier.tier1
         var tierNotes: [String] = []
@@ -458,8 +425,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
 
     // MARK: - Tier 3
 
-    /// Uncalibrated: rows can't map to time, so the test runs in cycles per row on the same
-    /// ratio data, and amplitude stays uncorrected for exposure (frequency is unknown).
+    /// Uncalibrated, so rows can't map to time: search in cycles per row and skip exposure correction.
     private func presenceOnly(
         field: FlatFieldCapture,
         metadata: CaptureMetadata,
@@ -559,9 +525,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         return (lowHz + Double(best) * step, grid[best], grid)
     }
 
-    /// Coherent grid over `around ± halfBand`, then a fine grid and a parabola around the best
-    /// point. The runner-up is the strongest point at least half a frame rate away: in practice
-    /// the nearest alias tooth.
+    /// Coarse then fine grid around the center, finished with a parabola.
+    /// The runner-up is the best point at least half a frame rate away, usually the nearest alias tooth.
     static func refine(
         _ coherent: CoherentSpectrum,
         around centre: Double,
@@ -607,12 +572,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         return (low + (Double(best) + offset) * fineGridStepHz, powers[best])
     }
 
-    /// The slow tooth `|f − n·fps|` of `frequency`, if `frequency` is better read as a
-    /// frame-rate alias of a slow brightness change than as flicker. A flicker at f puts
-    /// s² of its power on its slow tooth, s = |within-frame transform at n·fps| (≈ sinc(n·fps·W));
-    /// a slow change at the slow tooth puts s² of its power on f. The cut sits between (power
-    /// ratio ≥ s), never below `aliasAmbiguityRatio`, so for n ≥ 2 only a clearly dominant
-    /// slow tooth vetoes.
+    /// Returns the slow drift frequency if this peak is better explained as a frame-rate alias of drift than as flicker.
+    /// The cutoff never drops below `aliasAmbiguityRatio`, so for n ≥ 2 only a clearly dominant slow tooth vetoes.
     static func slowAlias(_ coherent: CoherentSpectrum, frequency: Double, frameRate: Double, frames: Range<Int>) -> Double? {
         guard frameRate > 0, frequency > frameRate / 2 else { return nil }
         let harmonic = (frequency / frameRate).rounded()
@@ -625,12 +586,10 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         return atSlow >= cut * atPeak ? slow : nil
     }
 
-    /// Per-frame resolutions (1 / readout window) either side of a peak whose alias teeth
-    /// are compared; within it the within-frame transform still separates them.
+    /// How many per-frame resolutions either side of a peak to compare alias teeth over.
     static let aliasToothSpanResolutions: Double = 2
 
-    /// The frame-rate alias tooth `frequency + n·fps` (|n·fps| ≤ `span`) with the most
-    /// explained power.
+    /// The alias tooth (frequency + n·fps, within span) with the most power.
     static func strongestAliasTooth(
         _ coherent: CoherentSpectrum,
         of frequency: Double,
@@ -659,9 +618,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         return slowAliases.contains { abs(offset - $0) <= slowAliasExclusionHz }
     }
 
-    /// `frequency / k` (k = 2, 3) if the capture holds a significant component there that
-    /// `frequency`'s own waveform doesn't explain. Measured on the residual after folding at
-    /// `frequency`, so `frequency`'s alias teeth (one may sit on f/k) can't pose as it.
+    /// Returns frequency / 2 or / 3 if there's a real component there that frequency's own waveform doesn't explain.
+    /// Checked on the residual so frequency's alias teeth can't fake it.
     static func subharmonic(
         of frequency: Double,
         field: FlatFieldCapture,
@@ -689,8 +647,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
             let peak = fitPeak(residualCoherent, around: candidate, frames: frames).frequency
             guard abs(peak - candidate) <= coherentGridStepHz else { continue }
             let amplitude = residualCoherent.sinusoidFit(atHz: peak, frames: frames).amplitude
-            // The residual's own incoherent power there: noise, plus this component itself
-            // (conservative).
+            // Residual power here includes this component too, so the noise estimate is conservative.
             let power = residualSpectra.summedPower(atNormalizedFrequency: peak * lineReadoutTime, frames: frames)
             let sigma = max((2 * power).squareRoot() / samples, .leastNonzeroMagnitude)
             let gain = max(abs(sinc(peak * exposure)), CaptureStandard.minimumExposureSincGain)
@@ -727,8 +684,7 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         var isApproximate: Bool { truncated && bandLimit <= 3 }
     }
 
-    /// Highest harmonic k with |sinc(k f T)| ≥ `minimumExposureSincGain`, that the fold can
-    /// represent (< bins/2) and that rows sample (k f L ≤ 0.45).
+    /// Highest harmonic that the exposure, fold bins and row sampling can all still measure.
     static func harmonicLimit(frequency: Double, exposure: TimeInterval, lineReadoutTime: TimeInterval, binCount: Int) -> Int {
         var limit = 0
         for k in 1..<(binCount / 2) {
@@ -741,9 +697,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         return limit
     }
 
-    /// Fourier-decomposes the folded waveform; each harmonic is divided by the exposure's
-    /// box-filter gain |sinc(k f T)| and the phase bin's own sinc, kept only above
-    /// `harmonicSignificanceSigma`, and the light's waveform is rebuilt from what's kept.
+    /// Breaks the fold into harmonics, corrects each for exposure and bin blur, keeps the significant ones,
+    /// and rebuilds the waveform to read depth from.
     static func harmonicDepth(
         fold: PhaseFold,
         frequency: Double,
@@ -821,9 +776,8 @@ public struct RealFlickerAnalyzer: FlickerAnalyzing {
         return abs(ratio - ratio.rounded()) * Double(frameCount)
     }
 
-    /// A least-squares line through the timestamps against their frame numbers (a drop skips
-    /// one), not 1 / median delta: whether the flicker's phase drifted a whole cycle hinges on
-    /// the rate to ~0.01%, and a median delta carries the timestamps' jitter.
+    /// Fits a line through the timestamps instead of using the median delta, which is too jittery
+    /// to tell whether the flicker's phase drifted a full cycle.
     static func measuredFrameRate(_ times: [TimeInterval]) -> Double? {
         guard times.count >= 2 else { return nil }
         let deltas = zip(times.dropFirst(), times).map { $0 - $1 }.filter { $0 > 0 }
@@ -886,10 +840,8 @@ struct ExposureSummary {
 
 // MARK: - Confidence
 
-/// Each condition that cost confidence lowers it one level (high → medium → low) and leaves a
-/// note saying why. The base level comes from significance (present: ≥ 10σ high, ≥ 6σ medium);
-/// penalties: split halves disagree, motion residual, unstable exposure, dropped frames, frame
-/// rate off-standard, poor phase coverage, a blurred or uncertain depth.
+/// Each penalty drops confidence one level and leaves a note explaining why.
+/// The base level comes from significance (≥ 10σ high, ≥ 6σ medium).
 struct ConfidencePenalties {
     private(set) var notes: [String] = []
 
@@ -983,9 +935,8 @@ struct PhaseFold {
         return means
     }
 
-    /// Per row, the least-squares gain `g = Σ r·w / Σ w²` of the ratio against the fold model
-    /// across frames; dividing the row by it re-centres M(row) on the modelled flicker.
-    /// Least squares rather than `mean(r / w)` so deep PWM's near-zero phases can't blow up.
+    /// Per-row least-squares gain against the fold model, used to re-center M(row).
+    /// Least squares instead of mean(r / w) so deep PWM's near-zero phases don't blow up.
     func rowGains(geometry: FoldGeometry, field: FlatFieldCapture, frequency: Double) -> [Float]? {
         guard let model = filledMeans() else { return nil }
         let step = frequency * geometry.lineReadoutTime
@@ -1009,8 +960,7 @@ struct PhaseFold {
         return gains
     }
 
-    /// Linear between bin centres: a step model would leave the in-bin slope of sharp PWM
-    /// edges behind and read it as noise or motion.
+    /// Interpolates between bin centers so sharp PWM edges don't get read as noise or motion.
     static func interpolate(_ model: [Double], phase: Double) -> Double {
         let count = model.count
         let position = (phase - phase.rounded(.down)) * Double(count) - 0.5

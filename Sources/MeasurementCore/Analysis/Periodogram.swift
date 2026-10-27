@@ -1,8 +1,8 @@
 import Accelerate
 import Foundation
 
-/// Each frame's rows are samples ~18 µs apart (vs ~8 ms between frames), so per-frame
-/// spectra averaged by Welch's method reach a Nyquist frame-rate sampling never could.
+/// Rows within a frame are ~18 µs apart vs ~8 ms between frames,
+/// so averaging per-frame spectra reaches frequencies frame-rate sampling never could.
 public enum Periodogram {
 
     /// Bin `k` is normalized frequency `k / paddedLength`. `window` must match `signal.count`.
@@ -56,7 +56,7 @@ public enum Periodogram {
         public let runnerUpNormalizedFrequency: Double?
     }
 
-    /// `minBin` keeps the search clear of slow drift (hand shake, exposure walk) that isn't flicker.
+    /// `minBin` keeps the search away from slow drift (hand shake, exposure walk) that isn't flicker.
     public static func coarsePeak(rowSignals: [[Float]], minBin: Int = 2) throws -> CoarsePeak? {
         var summed: [Float]?
         var paddedLength = 0
@@ -128,8 +128,7 @@ public enum Periodogram {
         )
     }
 
-    /// Non-uniform DFT power search near `coarseHz`, using true sample times including the
-    /// blanking gaps between frames, which a bin-quantized FFT can't handle.
+    /// Non-uniform DFT power search near `coarseHz` using the real sample times, gaps between frames included.
     public static func refine(
         samples: [(time: TimeInterval, value: Float)],
         coarseHz: Double,
@@ -151,8 +150,8 @@ public enum Periodogram {
         var real = [Double](repeating: 0, count: gridPoints)
         var imag = [Double](repeating: 0, count: gridPoints)
 
-        // Trig per (sample, grid point) dominated analysis time, so each sample's phasor is
-        // rotated across the grid instead. vDSP, not Swift SIMD: SIMD is ~100x slower in Debug.
+        // Rotates each sample's phasor across the grid instead of calling trig per point, which was the bottleneck.
+        // Uses vDSP since Swift SIMD is ~100x slower in Debug.
         let blockSize = 1024
         let phase = UnsafeMutablePointer<Double>.allocate(capacity: blockSize)
         let phasorReal = UnsafeMutablePointer<Double>.allocate(capacity: blockSize)
@@ -221,14 +220,8 @@ public enum Periodogram {
 
 // MARK: - Hz-domain spectra (spec C3)
 
-/// Every frame's DTFT of its rows, kept so any frequency can be read back without
-/// recomputing: coherent sums across frames need one coefficient per frame per frequency,
-/// incoherent ones its magnitude.
-///
-/// Frequencies are normalised (cycles per row); multiply Hz by the line readout time.
-/// Coefficients are *centred*: their phase origin is the middle row, so they rotate slowly
-/// with frequency and linear interpolation between the zero-padded bins stays accurate.
-/// Stored bin-major so one frequency's frames are contiguous for vDSP.
+/// Every frame's DTFT of its rows, kept so any frequency can be read back without recomputing.
+/// Coefficients are centered on the middle row so interpolating between padded bins stays accurate.
 struct FrameSpectra: Sendable {
     enum Window: Sendable { case rectangular, hann }
 
@@ -242,8 +235,7 @@ struct FrameSpectra: Sendable {
     private let real: [Double]
     private let imag: [Double]
 
-    /// - Parameter oversampling: zero-padding factor over the row count (rounded up to a power
-    ///   of two); 8 keeps linear interpolation between bins within ~1% in amplitude.
+    /// - Parameter oversampling: zero-padding factor over the row count; 8 keeps bin interpolation within ~1%.
     init(
         signals: [[Float]],
         maxNormalizedFrequency: Double,
@@ -348,8 +340,7 @@ struct FrameSpectra: Sendable {
 
     var maxNormalizedFrequency: Double { Double(storedBins - 2) / Double(paddedLength) }
 
-    /// Every frame in `frames`' centred coefficient at `normalizedFrequency`, linearly
-    /// interpolated between bins, written to `outReal`/`outImag` (length `frames.count`).
+    /// Each frame's centered coefficient at `normalizedFrequency`, interpolated between bins into `outReal`/`outImag`.
     func coefficients(
         atNormalizedFrequency normalizedFrequency: Double,
         frames: Range<Int>,
@@ -387,8 +378,7 @@ struct FrameSpectra: Sendable {
         return sumRe + sumIm
     }
 
-    /// Mean over all frames of |coefficient|² at each stored bin: the incoherent (Welch-style)
-    /// spectrum. Bin `k` is `k / paddedLength` cycles per row.
+    /// Mean |coefficient|² per bin across all frames, i.e. the incoherent (Welch-style) spectrum.
     func incoherentSpectrum() -> [Double] {
         var spectrum = [Double](repeating: 0, count: storedBins)
         real.withUnsafeBufferPointer { re in
@@ -406,9 +396,8 @@ struct FrameSpectra: Sendable {
     }
 }
 
-/// Coherent (non-uniform DFT) power across frames, using each frame's real presentation time:
-/// `X(f) = Σ_frames e^{−i2πf·t_centre} · ã_frame(f·L)`. Equivalent to a DFT over every sample
-/// at its true time, including the blanking gaps between frames, at ~frames cost per frequency.
+/// Coherent power across frames using each frame's real timestamp.
+/// Same as a DFT over every sample at its true time, but costs about one op per frame per frequency.
 struct CoherentSpectrum: Sendable {
     let spectra: FrameSpectra
     let lineReadoutTime: TimeInterval
@@ -430,13 +419,8 @@ struct CoherentSpectrum: Sendable {
         samplesPerFrame = centredRows.count
     }
 
-    /// Least-squares fit of a *real* sinusoid `a cos ωt + b sin ωt` at `frequency`.
-    ///
-    /// `|X|²` alone treats the signal as one complex exponential; with gapped sampling the
-    /// negative-frequency image (and its alias teeth) leaks into the positive peak and biases
-    /// it by millihertz, which smears a phase fold over 4 s. The fit's Gram matrix comes from
-    /// the sampling pattern's transform at 2f, `Σ e^{−i2ωt}`, which is cheap because every frame
-    /// shares one row mask.
+    /// Least-squares fit of a real sinusoid at `frequency`.
+    /// Plain |X|² lets the mirror image leak in and bias the peak by millihertz, which smears a 4 s phase fold.
     func sinusoidFit(atHz frequency: Double, frames: Range<Int>) -> (amplitude: Double, explainedPower: Double) {
         let x = transform(atHz: frequency, frames: frames)
         let c = x.re
@@ -477,8 +461,7 @@ struct CoherentSpectrum: Sendable {
 
     var allFrames: Range<Int> { 0..<spectra.frameCount }
 
-    /// |Σ_rows e^{i2π·offset·L·row}| / rows over the usable rows: how much of a line at f a
-    /// frame's rows still see at f ± offset. Alias teeth are this much weaker than the line.
+    /// How much of a line at f a frame's rows still see at f ± offset; alias teeth are this much weaker.
     func withinFrameResponse(offsetHz: Double) -> Double {
         guard !centredRows.isEmpty else { return 0 }
         var re = 0.0

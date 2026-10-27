@@ -4,9 +4,9 @@ import Foundation
 /// What the response sweep produced, kept for tests and diagnostics.
 struct ResponseCurveSolution: Sendable {
     enum Model: Sendable, Equatable {
-        /// ln F⁻¹(x) = Σ a_i u^i, i = 1…order, u = ln x: bends where a real tone curve bends.
+        /// Log-polynomial in ln x, so it can bend where a real tone curve bends.
         case polynomial(order: Int)
-        /// F⁻¹(x) = x^γ: one number, used when the data can't support three.
+        /// Plain gamma curve, used when the data can't support more.
         case gamma
     }
 
@@ -19,42 +19,30 @@ struct ResponseCurveSolution: Sendable {
     let observationCount: Int
 }
 
-/// Inverse camera response from a short ISO sweep, by plain least squares.
-///
-/// ISO is a gain applied before the tone curve, so a patch of scene with exposure E seen at
-/// gain g reads code c = F(g·E). Taking logs, ln F⁻¹(c) = ln E + ln g. Subtracting each
-/// patch's mean over its steps removes the unknown E, leaving one linear equation per
-/// observation in the curve's coefficients alone. At most five coefficients (one, for gamma)
-/// means a handful of patches is plenty, nothing needs tuning, and it solves in milliseconds
-/// on any phone. Codes are normalised as x = (c − black)/(white − black), so u = ln x is 0
-/// at white and the curve is pinned at F⁻¹(white) = 1 with no extra parameter.
+/// Solves the inverse camera response from a short ISO sweep with plain least squares.
+/// ISO is applied before the tone curve, so per-patch means cancel the unknown scene brightness and leave a linear fit.
 enum ResponseCurveSolver {
 
-    /// Rows averaged into one patch: a defocused scene has no detail at this scale, and fewer,
-    /// cleaner patches beat many noisy ones.
+    /// Rows averaged into one patch; fewer clean patches beat many noisy ones on a defocused scene.
     static let patchRows = 8
 
-    /// A patch-step is used only this far (codes) inside black and saturation.
+    /// How far (in codes) a patch-step has to stay from black and saturation to be used.
     static let blackMarginCodes = 3.0
 
     /// Patch-steps needed to fit, and the extra a polynomial needs over gamma.
     static let minimumObservations = 12
     static let polynomialMinimumObservations = 60
 
-    /// A polynomial is used only if the sweep saw at least this span of normalised codes;
-    /// otherwise its bends would be guesses.
+    /// Minimum span of codes the sweep needs before we trust a polynomial's bends.
     static let polynomialMinimumSpan = 0.35
 
-    /// Below this span of normalised codes the sweep says too little about the curve where
-    /// measurements use it.
+    /// Below this span the sweep says too little about the part of the curve measurements use.
     static let minimumObservedSpan = 0.15
 
     /// Plausible gamma for an 8-bit display encoding (sRGB ≈ 2.2–2.4, Rec.709 ≈ 1.9–2.2).
     static let plausibleGamma: ClosedRange<Double> = 1.2...3.5
 
-    /// Generous on purpose: real camera pipelines add noise reduction and mild local
-    /// adaptation the model doesn't capture, and a curve with this misfit still recovers depth
-    /// far better than none.
+    /// Loose on purpose, since real pipelines add noise reduction the model ignores, and a rough curve still beats none.
     static let maximumRMSLogResidual = 0.25
 
     static func solve(sweep: [FrameSequence]) throws -> ResponseCurveSolution {
@@ -62,8 +50,7 @@ enum ResponseCurveSolver {
         guard let first = sweep.first else { throw unsolvable("no sweep steps were captured") }
         let levels = LumaCodeLevels(pixelFormat: first.metadata.pixelFormat)
 
-        // Per step: its gain, and each patch's temporal mean code. The 29 fps phase drift
-        // averages a mains flicker out over a step's frames.
+        // Each step's gain and per-patch mean code; frame-to-frame phase drift averages out mains flicker.
         var logGains: [Double] = []
         var rowBlocks: [RowBlocks] = []
         for (index, sequence) in sweep.enumerated() {
@@ -79,9 +66,8 @@ enum ResponseCurveSolver {
             throw unsolvable("the sweep frames were empty or changed size")
         }
 
-        // A hand-held phone drifts between steps; at an edge, a few rows of drift changes what
-        // a patch sees. Each step is lined up with the middle one first, so patches compare
-        // the same piece of scene rather than the same pixels.
+        // A handheld phone drifts between steps, so line each step up with the middle one first.
+        // That way patches compare the same piece of scene instead of the same pixels.
         let order = logGains.indices.sorted { logGains[$0] < logGains[$1] }
         let referenceStep = order[order.count / 2]
         let referenceProfile = rowBlocks[referenceStep].edgeProfile(black: Double(levels.black))
@@ -101,9 +87,7 @@ enum ResponseCurveSolver {
         }
         let smooth = smoothPatches(steps: steps, patchCount: patchCount, levels: levels)
 
-        // All steps first. A hand-held sweep can have one step that disagrees with the rest
-        // (a late exposure change, an ISO the camera didn't quite apply); if the whole sweep
-        // doesn't fit, the best fit leaving one step out is taken instead.
+        // Try all steps first; if one bad step ruins the fit, take the best fit that leaves one step out.
         let all = Array(steps.indices)
         do {
             return try solve(steps: steps, using: all, patchCount: patchCount, smooth: smooth, levels: levels)
@@ -130,13 +114,10 @@ enum ResponseCurveSolver {
 
     typealias Observation = (u: Double, logGain: Double)
 
-    /// A patch whose neighbours above and below differ from it by more than this (relative,
-    /// in the middle step) sits on an edge, where hand movement between steps changes what it
-    /// sees even after the steps are lined up.
+    /// Neighbor difference above which a patch counts as an edge, where hand movement changes what it sees.
     static let edgeContrast = 0.08
 
-    /// Patches away from edges, judged on the step nearest the middle of the sweep. Every
-    /// patch, if that would leave too few to fit (a scene that's all edges).
+    /// Patches away from edges, judged on the middle step. Falls back to every patch if too few are left.
     static func smoothPatches(steps: [Step], patchCount: Int, levels: LumaCodeLevels) -> [Bool] {
         let sorted = steps.indices.sorted { steps[$0].logGain < steps[$1].logGain }
         let reference = steps[sorted[sorted.count / 2]]
@@ -149,8 +130,7 @@ enum ResponseCurveSolver {
             guard above >= 0, below < patchCount else { continue }
             let level = reference.means[patch] - black
             guard level > 0 else { continue }
-            // Vertical neighbours only: sideways ones also reject the smooth flanks of a lamp,
-            // which carry the bright codes the curve's top needs.
+            // Only check vertical neighbors, since sideways ones would reject the lamp's bright smooth flanks.
             let contrast = max(
                 abs(reference.means[above] - reference.means[patch]),
                 abs(reference.means[below] - reference.means[patch])
@@ -178,8 +158,7 @@ enum ResponseCurveSolver {
             var group: [Observation] = []
             for step in indices {
                 let code = steps[step].means[patch]
-                // Any pixel at black or saturation in any frame drags the patch's mean
-                // (the flicker's peaks clip first), so the whole patch-step goes.
+                // Any black or saturated pixel in any frame skews the mean, so drop the whole patch-step.
                 guard !steps[step].clipped[patch], code >= black + blackMarginCodes, code <= ceiling else { continue }
                 group.append((log((code - black) / range), steps[step].logGain))
             }
@@ -200,9 +179,8 @@ enum ResponseCurveSolver {
             ))
         }
 
-        // The most flexible curve that stays monotone, down to gamma: a strongly S-shaped tone
-        // curve needs the extra bends. Its wiggle where data thins out is handled by trusting
-        // the fit only where readings are dense (`lookupTable`).
+        // Use the most flexible curve that stays monotone, falling back to gamma.
+        // `lookupTable` handles the wiggle where data gets thin.
         var candidates: [(order: Int, fit: Polynomial)] = []
         if let gamma = robustFit(groups: groups, order: 1), plausibleGamma.contains(gamma.coefficients[0]) {
             candidates.append((1, gamma))
@@ -216,9 +194,8 @@ enum ResponseCurveSolver {
             }
         }
         guard let chosen = candidates.last else {
-            // The fitted gamma says what went wrong: far above the range means codes barely
-            // moved with ISO (the gain wasn't applied, or was undone downstream); near 1 means
-            // the gain came after the tone curve.
+            // The fitted gamma hints at what went wrong: way too high means ISO barely changed the codes,
+            // near 1 means the gain came after the tone curve.
             let gamma = robustFit(groups: groups, order: 1)?.coefficients[0] ?? .nan
             throw unsolvable(String(
                 format: "the camera's response didn't look like any display encoding (gamma %.2f, expected %.1f–%.1f, from %d readings at codes %.0f%%–%.0f%%)",
@@ -243,12 +220,10 @@ enum ResponseCurveSolver {
         return group
     }
 
-    /// Readings further than this many robust standard deviations from the fit are dropped
-    /// and the curve refitted: a patch the hand moved across, a reflection that came and went.
+    /// Readings this many robust SDs off the fit get dropped and the curve refit (hand moved, a reflection, etc).
     static let outlierSigma = 3.0
 
-    /// The fit, then up to two refits without its outliers. Never drops more than a quarter of
-    /// the readings: if that many disagree, the misfit should say so.
+    /// Fits, then refits up to twice without outliers, never dropping more than a quarter of readings.
     static func robustFit(groups: [[Observation]], order: Int) -> Polynomial? {
         guard var current = fit(groups: groups, order: order) else { return nil }
         var kept = groups
@@ -300,7 +275,7 @@ enum ResponseCurveSolver {
         var rmsLogResidual: Double
     }
 
-    /// Least squares on Σ_i a_i (u^i − ū^i_p) = ln g − mean_p(ln g), ū_p the patch's mean.
+    /// Least squares on per-patch mean-subtracted terms against ln g minus its patch mean.
     static func fit(groups: [[Observation]], order: Int) -> Polynomial? {
         var normal = [Double](repeating: 0, count: order * order)
         var rhs = [Double](repeating: 0, count: order)
@@ -337,8 +312,7 @@ enum ResponseCurveSolver {
         return Polynomial(coefficients: coefficients, rmsLogResidual: (squares / Double(dof)).squareRoot())
     }
 
-    /// d ln F⁻¹ / du > 0 from the lowest observed code to white, so brighter always maps to
-    /// more light.
+    /// Checks the curve always increases from the lowest observed code to white, so brighter means more light.
     static func isMonotone(_ a: [Double], from lowest: Double) -> Bool {
         let low = log(max(lowest, 1e-6))
         return (0...64).allSatisfy { index in
@@ -374,15 +348,11 @@ enum ResponseCurveSolver {
         )
     }
 
-    /// Share of readings at each end of the observed codes where the fit is not trusted on its
-    /// own: readings thin out there, and a polynomial wanders where data is thin.
+    /// Share of readings at each end where the fit isn't trusted on its own, since data thins out there.
     static let trustedQuantile = 0.03
 
-    /// The fitted curve where readings are dense (the `trustedQuantile` to 1 − that quantile
-    /// of observed codes). Beyond that it continues as a straight line in log–log (a local
-    /// power law) whose slope is the average over the next stretch of dense data, not the
-    /// derivative at one edge point. 0 at black; normalised so the brightest code is 1 (only
-    /// ratios matter downstream).
+    /// The fitted curve where readings are dense, extended as a straight log-log line beyond that.
+    /// 0 at black and normalized so the brightest code is 1.
     static func lookupTable(_ a: [Double], observedCodes: [Double], levels: LumaCodeLevels) throws -> ResponseCurve {
         func logCurve(_ u: Double) -> Double {
             a.enumerated().reduce(0) { $0 + $1.element * pow(u, Double($1.offset + 1)) }
@@ -439,15 +409,12 @@ enum ResponseCurveSolver {
         return gains[gains.count / 2]
     }
 
-    /// A frame whose overall brightness is this far (relative) from the settled level is
-    /// dropped: it was exposed before the step's ISO took effect. Steps are a stop apart, so a
-    /// stale frame is 25%+ off in code; the light's own flicker moves frames only ~5%, and
-    /// must not be filtered, or the dim half of its cycle would be dropped and bias the mean.
+    /// Frames this far off the settled brightness were shot before the new ISO kicked in, so drop them.
+    /// Steps are 25%+ apart but flicker only moves frames ~5%, so flicker never trips this.
     static let frameBrightnessTolerance = 0.15
 
-    /// One step's mean code per (row, column block) over its kept frames, and whether any pixel
-    /// there sat at black or saturation. Kept per row, not per patch, so the step can be lined
-    /// up with the others row by row before patches are formed.
+    /// One step's mean code per row and column block, plus whether anything clipped.
+    /// Kept per row so steps can be lined up before patches are formed.
     struct RowBlocks {
         let rows: Int
         let blocks: Int
@@ -455,8 +422,7 @@ enum ResponseCurveSolver {
         let means: [Double]
         let clipped: [Bool]
 
-        /// High-passed log row profile: edges, independent of the step's gain and of the
-        /// tone curve's slope (a monotone curve keeps edges where they are).
+        /// High-passed log row profile, so edges line up regardless of gain or tone curve.
         func edgeProfile(black: Double) -> [Double] {
             let logs = (0..<rows).map { y -> Double in
                 var sum = 0.0
@@ -473,9 +439,8 @@ enum ResponseCurveSolver {
             }
         }
 
-        /// Patches of `patchRows` rows × one block, in the reference step's coordinates: the
-        /// patch at reference rows y… is read from this step's rows y + shift…. Patches that
-        /// fall off the frame are marked clipped (unusable).
+        /// Patches in the reference step's coordinates, shifted to this step's rows.
+        /// Patches that fall off the frame are marked clipped.
         func patches(shift: Int) -> (means: [Double], clipped: [Bool]) {
             let bands = rows / patchRows
             var patchMeans = [Double](repeating: 0, count: bands * blocks)
@@ -501,9 +466,8 @@ enum ResponseCurveSolver {
     /// Largest drift (fraction of the frame height) searched between steps.
     static let maximumShiftFraction = 0.2
 
-    /// The lag d (rows) that best lines `profile` up with `reference`: the scene at reference
-    /// row y is at row y + d here. 0 when the scene has no edges to line up (a flat wall),
-    /// where drift doesn't matter anyway.
+    /// Row shift that best lines this profile up with the reference.
+    /// 0 when there are no edges to match, where drift doesn't matter anyway.
     static func verticalShift(of profile: [Double], against reference: [Double]) -> Int {
         let rows = min(profile.count, reference.count)
         let limit = Int(Double(rows) * maximumShiftFraction)
@@ -558,8 +522,7 @@ enum ResponseCurveSolver {
         }
         guard !frameSums.isEmpty else { return RowBlocks(rows: 0, blocks: 0, means: [], clipped: []) }
 
-        // The reference is the second half's median: a late exposure change only ever
-        // affects the first frames, so the end of the step is what it settled to.
+        // Use the second half's median as the reference, since late exposure changes only hit the first frames.
         let totals = frameSums.map { $0.reduce(0, +) }
         let settled = totals.suffix(max(1, totals.count / 2)).sorted()
         let reference = settled[settled.count / 2]

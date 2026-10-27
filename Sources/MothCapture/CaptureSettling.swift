@@ -7,19 +7,16 @@ struct ExposurePlan: Sendable, Equatable {
     let exposureDuration: TimeInterval
     let iso: Float
 
-    /// How many stops the scene falls short of the metering target even at the format's
-    /// maximum ISO; 0 when the target is reachable.
+    /// How many stops short of the metering target the scene is even at max ISO; 0 if reachable.
     let shortfallStops: Double
 
-    /// Beyond this shortfall the frames sit so close to black that the live dim warning is
-    /// raised from the start rather than after the first frames arrive. Exposure is fixed for
-    /// the whole capture, so re-aiming can't recover it; only a brighter target can.
+    /// Past this shortfall, warn about dim light from the start.
+    /// Exposure is fixed for the capture, so only a brighter target helps.
     static let dimShortfallStops: Double = 4
 
     var predictsDim: Bool { shortfallStops >= Self.dimShortfallStops }
 
-    /// Converts continuous AE's (duration, ISO) to the standard exposure via
-    /// `CaptureStandard.meteredISO`, keeping the unclamped ISO to measure any shortfall.
+    /// Converts AE's duration and ISO to the standard exposure, keeping the unclamped ISO to measure any shortfall.
     static func metered(
         autoExposureDuration: TimeInterval,
         autoExposureISO: Float,
@@ -59,26 +56,21 @@ struct ExposurePlan: Sendable, Equatable {
     }
 }
 
-/// How a capture chooses its exposure. Always the standard duration with ISO adapting,
-/// except response-sweep steps, which only feed the response solver.
+/// How a capture picks its exposure: standard duration with ISO adapting, except for response sweep steps.
 public enum CaptureExposure: Sendable, Equatable {
     /// From continuous AE at capture start (measurements and readout calibration).
     case metered
 
-    /// A set ISO and duration (response-curve sweep steps; the duration is shorter than the
-    /// standard only where the scene needs less gain than the minimum ISO gives).
+    /// A set ISO and duration for sweep steps; shorter than standard only when the scene's too bright for the min ISO.
     case fixed(iso: Float, duration: TimeInterval)
 }
 
-/// Decides, frame by frame, whether a delivered frame belongs to the capture. Frames before
-/// the custom exposure's sync time carry the old exposure; the next `settleFrames` are
-/// discarded too, as margin for read-back values and any residual adjustment. Elapsed time
-/// (and so progress and duration) counts from the first kept frame.
+/// Decides whether each frame belongs to the capture: drops frames before the new exposure plus `settleFrames` more.
+/// Elapsed time counts from the first kept frame.
 struct SettleGate: Sendable, Equatable {
     let settleFrames: Int
 
-    /// If the exposure completion never arrives (unsupported, or superseded), stop waiting
-    /// after this long and settle from the next frame; read-back values still tell the truth.
+    /// If the exposure completion never arrives, stop waiting after this long; read-back values still tell the truth.
     let maximumWait: TimeInterval
 
     /// PTS rounding slack when comparing against the sync time.
@@ -98,8 +90,7 @@ struct SettleGate: Sendable, Equatable {
 
     var isSettled: Bool { firstKeptTime != nil }
 
-    /// The completion handler's sync time: the PTS of the first frame with the new exposure.
-    /// Only the first call counts.
+    /// Sync time from the completion handler (PTS of the first frame with the new exposure). Only the first call counts.
     mutating func exposureApplied(syncTime: TimeInterval) {
         guard self.syncTime == nil, firstKeptTime == nil else { return }
         self.syncTime = syncTime

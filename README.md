@@ -32,9 +32,9 @@ What Moth can report depends on what the device can measure reliably. It never s
 
 | Tier | Requires | Reports |
 |---|---|---|
-| 1 — Full measurement | Calibrated, including the light response, and a capture that held the standard exposure | Frequency, depth, IEEE 1789 verdict |
-| 2 — Frequency only | Calibrated, but the capture couldn't hold the standard exposure | Frequency |
-| 3 — Presence only | Uncalibrated, or calibrated under an older measurement method | Whether flicker is present |
+| 1: Full measurement | Calibrated, including the light response, and a capture that held the standard exposure | Frequency, depth, IEEE 1789 verdict |
+| 2: Frequency only | Calibrated, but the capture couldn't hold the standard exposure | Frequency |
+| 3: Presence only | Uncalibrated, or calibrated under an older measurement method | Whether flicker is present |
 
 Each saved measurement records how it was captured (exposure, ISO, measured frame rate, picture size, dropped frames, and whether the light-response curve was applied). You can see these under *Capture details* on the result and in a room's history.
 

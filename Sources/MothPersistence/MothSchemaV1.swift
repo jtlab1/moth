@@ -86,8 +86,7 @@ extension MothSchemaV1 {
         }
     }
 
-    /// `FlickerResult` as a JSON blob: nothing queries its internals, and a blob can't drift
-    /// from its `Codable`. Fields a survey filters on are their own columns.
+    /// `FlickerResult` stored as a JSON blob since nothing queries inside it. Fields we filter on get their own columns.
     @Model
     public final class RoomMeasurementRecord {
         @Attribute(.unique) public var id: UUID

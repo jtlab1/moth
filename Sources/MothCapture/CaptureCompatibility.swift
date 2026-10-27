@@ -3,8 +3,7 @@ import CoreMedia
 import Foundation
 import MeasurementCore
 
-// iOS-only AVFoundation members isolated so the rest of the capture layer type-checks with
-// `swift build`. Non-iOS branches are placeholders never used at runtime.
+// Keeps iOS-only AVFoundation calls here so the rest builds with `swift build`. Non-iOS branches never run.
 
 extension AVCaptureSession {
     /// Named presets override the chosen format, and with it the frame rate.
@@ -114,9 +113,8 @@ extension AVCaptureDevice {
         #endif
     }
 
-    /// Requires the device configuration lock. `false` (and no call to `applied`) when
-    /// custom exposure isn't available. `applied` receives the device-clock sync time of the
-    /// first buffer with the new values, on an arbitrary queue.
+    /// Needs the config lock. Returns `false` if custom exposure isn't available.
+    /// `applied` gets the sync time of the first buffer with the new values, on any queue.
     @discardableResult
     func setCustomExposure(
         duration: TimeInterval,
@@ -139,8 +137,7 @@ extension AVCaptureDevice {
         #endif
     }
 
-    /// Requires the device configuration lock. Preview meters continuously so the metering at
-    /// capture start reflects what the camera is aimed at.
+    /// Needs the config lock. Preview meters continuously so capture start reflects where the camera's aimed.
     func restoreContinuousAutoExposure() {
         #if os(iOS)
         if isExposureModeSupported(.continuousAutoExposure) {
@@ -149,10 +146,8 @@ extension AVCaptureDevice {
         #endif
     }
 
-    /// Requires the device configuration lock. Everything spec A forces besides format, frame
-    /// rate and exposure: each is a scene-dependent or time-varying transform of the measured
-    /// quantity, or would shift the rows. Idempotent, so capture start re-applies it in case
-    /// something (a session restart) reset a property.
+    /// Needs the config lock. Turns off everything that would warp or shift the measured rows.
+    /// Safe to call again, so capture start re-applies it in case a session restart reset something.
     func applyStandardImagingState() {
         #if os(iOS)
         // Video HDR: a non-linear, scene-dependent transform.
@@ -249,8 +244,7 @@ extension AVCaptureDevice {
 }
 
 extension AVCaptureConnection {
-    /// Rows must be the sensor's readout rows, untouched: stabilization warps and crops them,
-    /// rotation turns rows into columns, mirroring is harmless but not the standard.
+    /// Rows have to stay the sensor's raw readout rows, so no stabilization, rotation or mirroring.
     func applyStandardBufferState() {
         #if os(iOS)
         if isVideoStabilizationSupported {
@@ -268,8 +262,7 @@ extension AVCaptureConnection {
 }
 
 extension AVCaptureSession {
-    /// Converts a device-clock sync time (exposure completion handlers) to the clock sample
-    /// buffers are stamped in. Identity when either clock is unknown.
+    /// Converts a device-clock sync time to the sample buffer clock. Identity if either clock is unknown.
     func bufferTime(fromDeviceTime time: CMTime, deviceClock: CMClock?) -> CMTime {
         #if os(iOS)
         guard let deviceClock, let bufferClock = synchronizationClock else { return time }

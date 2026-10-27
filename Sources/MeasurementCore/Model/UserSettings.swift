@@ -1,7 +1,6 @@
 import Foundation
 
-/// No "match system" option: it would make the Settings control look broken whenever the
-/// system already agrees.
+/// No "match system" option, since the control would look broken whenever the system already agrees.
 public enum AppearanceMode: String, Sendable, Codable, CaseIterable, Identifiable {
     case light
     case dark

@@ -76,9 +76,8 @@ public enum MainsRegion: String, Sendable, Codable, CaseIterable, Identifiable {
 }
 
 extension MainsRegion {
-    // Allowlists sourced from Wikipedia's "Mains electricity by country" (2026-09-22). Anything
-    // absent, including split grids (Japan, Brazil, French Polynesia), returns `nil` so the user
-    // is asked: a wrong silent default poisons every reading.
+    // From Wikipedia's "Mains electricity by country" (2026-09-22). Anything missing or split (Japan, Brazil) returns `nil`
+    // so the user gets asked, since a wrong silent default would poison every reading.
 
     private static let confident60HzRegionCodes: Set<String> = [
         "US", "CA", "MX", "CO", "CR", "CU", "DO", "EC", "SV", "GT", "GY", "HN",

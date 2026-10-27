@@ -33,16 +33,15 @@ public enum MothStoreError: Error, LocalizedError {
     }
 }
 
-/// The one place domain structs map to `@Model` records. `@MainActor` because
-/// `ModelContext` isn't `Sendable` and every caller is SwiftUI.
+/// The one place domain structs map to `@Model` records.
+/// `@MainActor` because `ModelContext` isn't `Sendable` and every caller is SwiftUI.
 @MainActor
 @Observable
 public final class MothStore {
     private let container: ModelContainer
     private var context: ModelContext { container.mainContext }
 
-    /// Every read touches this and every write bumps it: fetches aren't stored properties, so
-    /// `@Observable` would otherwise never re-render after a write.
+    /// Every read touches this and every write bumps it, so `@Observable` re-renders after writes.
     private var changeToken = 0
 
     public init(container: ModelContainer) {
@@ -63,8 +62,8 @@ public final class MothStore {
         return MothStore(container: container)
     }
 
-    /// Takes the URL so tests stay off the real store. Replaces an unopenable store with a
-    /// fresh one: the only fallback, in-memory, would wipe data on every launch.
+    /// Takes a URL so tests stay off the real store. Replaces an unopenable store with a fresh one,
+    /// since falling back to in-memory would wipe data every launch.
     static func makeDefault(storeURL: URL) throws -> MothStore {
         do {
             return try MothStore(container: Self.makeOnDiskContainer(at: storeURL))
@@ -131,9 +130,8 @@ public final class MothStore {
         return fetchAll(MothSchemaV4.CalibrationRecord.self, sortBy: \.capturedAt).map(Self.domain)
     }
 
-    /// The gate for using a calibration on a capture in `format`: `.calibrated` only for a
-    /// current-version calibration of this model solved under a matching format; `.outdated`
-    /// when this model has calibrations but none applies.
+    /// Whether a calibration can be used for `format`: `.calibrated` for a current, matching one,
+    /// `.outdated` if this model has calibrations but none apply.
     public func calibrationState(
         forDeviceModelIdentifier modelIdentifier: String,
         format: CaptureFormatSignature
@@ -155,10 +153,8 @@ public final class MothStore {
         return .calibrated(applicable)
     }
 
-    /// For callers that don't know the capture format yet (the first-run gate, Settings).
-    /// Version-aware but format-blind: anything solved before the current method reads as
-    /// `.outdated`, never `.calibrated`. The capture layer re-checks the format before using a
-    /// `.calibrated` result (`DeviceCalibration.appliesTo(modelIdentifier:format:)`).
+    /// For callers that don't know the format yet (first-run gate, Settings).
+    /// Checks version but not format; the capture layer re-checks format before using it.
     public func calibrationState(forDeviceModelIdentifier modelIdentifier: String) -> CalibrationState {
         let all = calibrations
         guard let latest = all.max(by: { $0.capturedAt < $1.capturedAt }) else {
@@ -318,8 +314,7 @@ public final class MothStore {
         changeToken += 1
     }
 
-    /// Names stay unique case-insensitively: `saveMeasurement` resolves rooms by name, so two
-    /// rooms sharing one would split readings unpredictably.
+    /// Names stay unique ignoring case, since `saveMeasurement` looks rooms up by name.
     public func renameRoom(id: UUID, to name: String) throws {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { throw MothStoreError.nameEmpty }
@@ -364,8 +359,7 @@ public final class MothStore {
         changeToken += 1
     }
 
-    /// Its rooms become unassigned rather than following the schema's cascade: a building is a
-    /// grouping, and deleting one shouldn't silently erase every reading inside it.
+    /// Its rooms become unassigned instead of cascading, since deleting a grouping shouldn't erase readings.
     public func deleteBuilding(id: UUID) throws {
         guard let record = fetchAll(MothSchemaV4.BuildingRecord.self, sortBy: \.createdAt).first(where: { $0.id == id }) else {
             return
@@ -503,8 +497,7 @@ public final class MothStore {
         CustomCopingStrategy(id: record.id, title: record.title, createdAt: record.createdAt)
     }
 
-    /// A curve that no longer validates is dropped, not fatal: the calibration still serves
-    /// frequency, and Tier 1 simply stays off.
+    /// A curve that no longer validates gets dropped, not fatal; frequency still works and Tier 1 stays off.
     private static func domain(_ record: MothSchemaV4.CalibrationRecord) -> DeviceCalibration {
         DeviceCalibration(
             id: record.id,

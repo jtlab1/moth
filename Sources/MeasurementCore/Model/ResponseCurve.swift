@@ -1,8 +1,7 @@
 import Foundation
 
-/// The camera's inverse response: raw 8-bit luma code → relative linear exposure. Black is
-/// inside the table (codes at or below black map to ~0), so callers never subtract a black
-/// level on top of it. Solved per device and format during calibration.
+/// The camera's inverse response, mapping 8-bit luma to relative linear exposure, solved per device and format.
+/// Black is baked in, so callers never subtract a black level.
 public struct ResponseCurve: Sendable, Hashable {
     public static let entryCount = 256
 
@@ -18,8 +17,7 @@ public struct ResponseCurve: Sendable, Hashable {
         case wrongByteCount(Int)
     }
 
-    /// - Throws: `ValidationError` for anything that couldn't be a camera's inverse response:
-    ///   a non-monotone table would turn brighter light into a smaller reading.
+    /// - Throws: `ValidationError` if the table can't be a real inverse response (e.g. not monotone).
     public init(values: [Float]) throws {
         guard values.count == Self.entryCount else {
             throw ValidationError.wrongEntryCount(values.count)
@@ -33,8 +31,7 @@ public struct ResponseCurve: Sendable, Hashable {
         self.values = values
     }
 
-    /// Linearly interpolated between neighbouring codes; clamped to 0...255. Fractional codes
-    /// come from averaged or dithered values.
+    /// Interpolated between neighboring codes and clamped to 0...255, since averaged codes can be fractional.
     public func linear(forCode code: Float) -> Float {
         guard code.isFinite else { return code > 0 ? values[Self.entryCount - 1] : values[0] }
         let clamped = min(max(code, 0), Float(Self.entryCount - 1))
@@ -85,8 +82,7 @@ extension ResponseCurve {
     }
 }
 
-// Encoded as a bare array, and validated on decode so a corrupt backup can't smuggle in a
-// non-monotone table.
+// Encoded as a bare array and validated on decode so a corrupt backup can't sneak in a bad table.
 extension ResponseCurve: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -100,9 +96,8 @@ extension ResponseCurve: Codable {
 }
 
 extension ResponseCurve {
-    /// The sRGB decoding curve. The camera is forced into the sRGB colour space with tone
-    /// mapping off, so this is what it's asked to encode; used only when a phone's own
-    /// response couldn't be measured, and flagged wherever it's used.
+    /// The sRGB decoding curve, which is what the camera is set to encode.
+    /// Only used when a phone's own response couldn't be measured, and flagged when it is.
     public static let standardSRGB: ResponseCurve = {
         let values = (0..<entryCount).map { code -> Float in
             let encoded = Double(code) / 255
